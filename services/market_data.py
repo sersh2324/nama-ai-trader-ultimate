@@ -56,13 +56,50 @@ def get_fundamentals_news(symbol: str) -> tuple[dict, list]:
     return info, news
 
 
-def get_history_batch(symbols, period='2y', interval='1d'):
-    histories,errors={},[]
-    for symbol in symbols:
+def get_history_batch(symbols, period="2y", interval="1d", batch_size=15):
+    """Fetch symbols together, then retry missing symbols individually.
+
+    Returns (successful_frames, errors); provider limits and missing symbols are reported.
+    """
+    histories, errors = {}, []
+    symbols = list(dict.fromkeys(str(s).strip() for s in symbols if str(s).strip()))
+    for start in range(0, len(symbols), max(1, batch_size)):
+        group = symbols[start:start + max(1, batch_size)]
+        if len(group) == 1:
+            sym = group[0]
+            try:
+                frame = get_history(sym, period, interval)
+                if not frame.empty:
+                    histories[sym] = frame
+                else:
+                    errors.append(f"{sym}: no price data")
+            except Exception as exc:
+                errors.append(f"{sym}: {str(exc)[:100]}")
+            continue
+        effective_period = INTRADAY_PERIODS.get(interval, period) if period in ("1y", "2y", "5y", "10y") else period
         try:
-            df=get_history(symbol,period,interval)
-            if df is not None and not df.empty: histories[symbol]=df
-            else: errors.append(f'{symbol}: no price data')
+            raw = yf.download(group, period=effective_period, interval=interval,
+                              auto_adjust=True, progress=False, threads=True,
+                              group_by="ticker", timeout=25)
         except Exception as exc:
-            errors.append(f'{symbol}: {str(exc)[:100]}')
-    return histories,errors
+            raw = pd.DataFrame()
+            errors.append(f"Batch download: {str(exc)[:100]}")
+        for sym in group:
+            frame = pd.DataFrame()
+            if raw is not None and not raw.empty and isinstance(raw.columns, pd.MultiIndex):
+                for level in (0, 1):
+                    if sym in raw.columns.get_level_values(level):
+                        frame = normalize_history(raw.xs(sym, axis=1, level=level))
+                        break
+            if not frame.empty:
+                histories[sym] = frame
+                continue
+            try:
+                frame = get_history(sym, period, interval)
+                if not frame.empty:
+                    histories[sym] = frame
+                else:
+                    errors.append(f"{sym}: no price data")
+            except Exception as exc:
+                errors.append(f"{sym}: {str(exc)[:100]}")
+    return histories, errors
