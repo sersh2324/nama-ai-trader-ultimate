@@ -14,7 +14,7 @@ from services.symbols import US, SA, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 
-VERSION = "1.1.1"
+VERSION = "1.2.0-beta"
 st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
 initialize()
 
@@ -47,20 +47,20 @@ def load_universe(market_name):
 with st.spinner('جارٍ تحميل دليل الأسهم...'):
     universe, discovery_warnings = load_universe(market)
 options = sorted(universe)
+# Search remains available throughout the application.
 query = st.text_input('بحث باسم الشركة أو الرمز', placeholder='أرامكو أو Apple أو AAPL أو 2222').strip().casefold()
-matches = [s for s in options if query in s.casefold() or query in universe[s].casefold()] if query else options
+matches = [sym for sym in options if query in sym.casefold() or query in universe[sym].casefold()] if query else options
 visible = matches[:250]
-if len(matches)>250:
+if len(matches) > 250:
     st.caption(f'تظهر 250 نتيجة من {len(matches)}؛ اكتب اسمًا أو رمزًا لتضييق البحث.')
-selected = st.multiselect('الأسهم للتحليل اليدوي', visible, default=[], format_func=lambda s:f'{universe[s]} ({s})', max_selections=100)
+selected = st.multiselect('الأسهم للتحليل اليدوي', visible, default=[],
+                          format_func=lambda sym: f'{universe[sym]} ({sym})', max_selections=100)
 manual = st.text_input('إضافة رموز أخرى (افصل بينها بفاصلة)', '')
 symbols = list(dict.fromkeys(selected + [x.strip().upper() for x in manual.split(',') if x.strip()]))[:100]
-auto_scan = st.checkbox('فحص تلقائي دون اختيار الأسهم', value=True)
-scan_limit = st.select_slider('عدد الأسهم في دورة الفحص', options=[25,50,100,250,500,1000], value=50, disabled=not auto_scan)
-scan_offset = st.number_input('بداية الدفعة للوصول إلى بقية السوق', min_value=0, max_value=max(0,len(options)-1), value=0, step=50, disabled=not auto_scan)
 if discovery_warnings:
-    with st.expander('ملاحظات دليل الأسهم'):
-        for warning in discovery_warnings: st.warning(warning)
+    with st.expander('حالة تحميل دليل الشركات — مصادر بديلة أو أخطاء'):
+        for warning in discovery_warnings:
+            st.warning(warning)
 
 tabs = st.tabs(["لوحة السوق", "اكتشاف الفرص", "تحليل السهم", "خطة الصفقة", "المحفظة", "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات"])
 
@@ -68,9 +68,9 @@ with tabs[0]:
     st.subheader("لوحة السوق")
     st.write(f"السوق: **{market}** | نمط التداول: **{style}** | الإطار: **{interval}**")
     st.info("مصادر البيانات المجانية قد تكون متأخرة أو محدودة. لا تُعامل الأسعار على أنها لحظية ما لم يؤكد مزود البيانات ذلك.")
-    st.metric("الرموز المكتشفة", len(options))
+    st.metric("الرموز المتاحة", len(options))
     st.metric("الأسهم المختارة يدويًا", len(symbols))
-    st.caption("ابدأ بفحص الفرص لعرض آخر النتائج ومؤشرات السوق.")
+    st.caption("افتح تبويب اكتشاف الفرص؛ ستجد إعدادات الفحص التلقائي والزر في مكان واحد.")
 
 if "scan_results" not in st.session_state:
     st.session_state.scan_results = []
@@ -78,13 +78,31 @@ if "scan_frames" not in st.session_state:
     st.session_state.scan_frames = {}
 
 with tabs[1]:
-    st.subheader("ماسح الفرص")
-    scan_symbols = options[int(scan_offset):int(scan_offset)+int(scan_limit)] if auto_scan else symbols
+    st.subheader('🔎 اكتشاف الفرص — الماسح التلقائي')
+    st.caption('جميع إعدادات الماسح وزر بدء الفحص موجودة في هذا التبويب.')
+    st.info(f'السوق: {market} | الشركات المتاحة: {len(options)} | الإطار الزمني: {interval}')
+    scan_mode = st.radio('طريقة الفحص', ['تلقائي — دون اختيار أسهم', 'يدوي — الأسهم المختارة'], horizontal=True, key='scan_mode')
+    auto_scan = scan_mode.startswith('تلقائي')
+    if auto_scan:
+        scan_limit = st.select_slider('عدد الأسهم في دورة الفحص', options=[25,50,100,250,500,1000], value=25, key='scan_limit')
+        scan_offset = st.number_input('بداية الدفعة — لفحص بقية الأسهم', min_value=0,
+                                      max_value=max(0,len(options)-1), value=0, step=25, key='scan_offset')
+        scan_symbols = options[int(scan_offset):int(scan_offset)+int(scan_limit)]
+    else:
+        scan_symbols = symbols
+        st.caption(f'عدد الرموز المختارة يدويًا: {len(symbols)}')
+    st.write(f'**عدد الرموز التي سيحاول الماسح فحصها: {len(scan_symbols)}**')
+    if not scan_symbols:
+        st.error('لا توجد رموز للفحص. تحقق من تحميل دليل الشركات، أو أضف رمزًا يدويًا ثم اختر الوضع اليدوي.')
+    if auto_scan and discovery_warnings:
+        st.warning('قد تكون القائمة محدودة بسبب تعذر بعض مصادر دليل الشركات. راجع حالة تحميل دليل الشركات أعلاه.')
     if st.button('🔎 بدء فحص الفرص', type='primary', disabled=not scan_symbols):
         rows, frames, errors = [], {}, []
         bar = st.progress(0)
+        progress_text = st.empty()
         for start in range(0,len(scan_symbols),15):
             batch=scan_symbols[start:start+15]
+            progress_text.caption(f"جارٍ فحص {min(start+len(batch),len(scan_symbols))} من {len(scan_symbols)} رمزًا")
             histories,batch_errors=get_history_batch(batch,period,interval)
             errors.extend(batch_errors)
             for sym in batch:
@@ -102,11 +120,13 @@ with tabs[1]:
                     errors.append(f'{sym}: {str(exc)[:120]}')
             bar.progress(min(1.0,(start+len(batch))/len(scan_symbols)))
         bar.empty()
+        progress_text.empty()
         rows.sort(key=lambda r:r['score'],reverse=True)
         st.session_state.scan_results,st.session_state.scan_frames=rows,frames
         st.session_state.scan_time=datetime.now().strftime('%Y-%m-%d %H:%M')
         st.session_state.scan_count=len(scan_symbols)
         st.session_state.scan_failed=len(errors)
+        st.session_state.scan_success=len(histories) if len(scan_symbols)<=15 else len(rows)
         st.session_state.scan_completed=True
         if errors:
             with st.expander(f'ملاحظات جلب البيانات ({len(errors)})'):
@@ -130,7 +150,7 @@ with tabs[1]:
                 st.write(f"الدخول المرجعي: {r['entry']:.4f} | الوقف: {r['stop']:.4f} | الهدف: {r['target']:.4f}")
     else:
         if st.session_state.get("scan_completed"):
-            st.warning("انتهى الفحص دون فرص قابلة للعرض. راجع ملاحظات البيانات أو جرّب إطارًا زمنيًا آخر.")
+            st.warning("انتهى الفحص دون نتائج قابلة للعرض. قد تكون الأسعار غير متاحة أو التاريخ غير كافٍ. جرّب 1d وسوينغ، وراجع ملاحظات البيانات.")
         else:
             st.info("لم يتم الفحص بعد.")
 
