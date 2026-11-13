@@ -14,7 +14,7 @@ from services.symbols import US, SA, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
 initialize()
 
@@ -107,6 +107,7 @@ with tabs[1]:
         st.session_state.scan_time=datetime.now().strftime('%Y-%m-%d %H:%M')
         st.session_state.scan_count=len(scan_symbols)
         st.session_state.scan_failed=len(errors)
+        st.session_state.scan_completed=True
         if errors:
             with st.expander(f'ملاحظات جلب البيانات ({len(errors)})'):
                 st.write('\n'.join(errors[:200]))
@@ -128,7 +129,10 @@ with tabs[1]:
                 st.write("الأسباب:", "؛ ".join(r["reasons"]) or "لا توجد أسباب مؤكدة")
                 st.write(f"الدخول المرجعي: {r['entry']:.4f} | الوقف: {r['stop']:.4f} | الهدف: {r['target']:.4f}")
     else:
-        st.info("لم يتم الفحص بعد.")
+        if st.session_state.get("scan_completed"):
+            st.warning("انتهى الفحص دون فرص قابلة للعرض. راجع ملاحظات البيانات أو جرّب إطارًا زمنيًا آخر.")
+        else:
+            st.info("لم يتم الفحص بعد.")
 
 with tabs[2]:
     st.subheader("تحليل سهم بالتفصيل")
