@@ -54,3 +54,15 @@ def get_fundamentals_news(symbol: str) -> tuple[dict, list]:
         title = content.get("title") or item.get("title") or "Ø®Ø¨Ø± Ø¨Ø¯ÙÙ Ø¹ÙÙØ§Ù"
         news.append({"title": title, "url": url, "source": source, "date": str(date)})
     return info, news
+
+
+def get_history_batch(symbols, period='2y', interval='1d'):
+    histories,errors={},[]
+    for symbol in symbols:
+        try:
+            df=get_history(symbol,period,interval)
+            if df is not None and not df.empty: histories[symbol]=df
+            else: errors.append(f'{symbol}: no price data')
+        except Exception as exc:
+            errors.append(f'{symbol}: {str(exc)[:100]}')
+    return histories,errors
