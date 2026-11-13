@@ -3,7 +3,8 @@ import math
 import pandas as pd
 import streamlit as st
 
-from services.market_data import get_history, get_fundamentals_news, INTRADAY_PERIODS
+from services.market_data import get_history, get_history_batch, get_fundamentals_news, INTRADAY_PERIODS
+from services.universe import discover
 from services.scanner import analyze_symbol
 from services.backtest import run_backtest
 from services.risk_manager import position_size
@@ -13,7 +14,7 @@ from services.symbols import US, SA, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
 initialize()
 
@@ -39,19 +40,27 @@ with st.sidebar:
     fee_pct = st.number_input("تكاليف الصفقة الإجمالية %", 0.0, 5.0, 0.15, 0.05)
     slippage_pct = st.number_input("الانزلاق السعري %", 0.0, 5.0, 0.10, 0.05)
 
-if market == "الأمريكي":
-    universe = US
-elif market == "السعودي":
-    universe = SA
-else:
-    universe = {**US, **SA}
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_universe(market_name):
+    return discover(market_name)
 
-options = list(universe.keys())
-selected = st.multiselect("ابحث باسم الشركة أو الرمز واختر الأسهم",
-    options=options, default=options[:min(12,len(options))],
-    format_func=lambda s: f"{universe[s]} ({s})", max_selections=50)
-manual = st.text_input("إضافة رموز أخرى (افصل بينها بفاصلة)", "")
-symbols = list(dict.fromkeys(selected + [x.strip().upper() for x in manual.split(",") if x.strip()]))[:50]
+with st.spinner('جارٍ تحميل دليل الأسهم...'):
+    universe, discovery_warnings = load_universe(market)
+options = sorted(universe)
+query = st.text_input('بحث باسم الشركة أو الرمز', placeholder='أرامكو أو Apple أو AAPL أو 2222').strip().casefold()
+matches = [s for s in options if query in s.casefold() or query in universe[s].casefold()] if query else options
+visible = matches[:250]
+if len(matches)>250:
+    st.caption(f'تظهر 250 نتيجة من {len(matches)}؛ اكتب اسمًا أو رمزًا لتضييق البحث.')
+selected = st.multiselect('الأسهم للتحليل اليدوي', visible, default=[], format_func=lambda s:f'{universe[s]} ({s})', max_selections=100)
+manual = st.text_input('إضافة رموز أخرى (افصل بينها بفاصلة)', '')
+symbols = list(dict.fromkeys(selected + [x.strip().upper() for x in manual.split(',') if x.strip()]))[:100]
+auto_scan = st.checkbox('فحص تلقائي دون اختيار الأسهم', value=True)
+scan_limit = st.select_slider('عدد الأسهم في دورة الفحص', options=[25,50,100,250,500,1000], value=50, disabled=not auto_scan)
+scan_offset = st.number_input('بداية الدفعة للوصول إلى بقية السوق', min_value=0, max_value=max(0,len(options)-1), value=0, step=50, disabled=not auto_scan)
+if discovery_warnings:
+    with st.expander('ملاحظات دليل الأسهم'):
+        for warning in discovery_warnings: st.warning(warning)
 
 tabs = st.tabs(["لوحة السوق", "اكتشاف الفرص", "تحليل السهم", "خطة الصفقة", "المحفظة", "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات"])
 
@@ -59,7 +68,8 @@ with tabs[0]:
     st.subheader("لوحة السوق")
     st.write(f"السوق: **{market}** | نمط التداول: **{style}** | الإطار: **{interval}**")
     st.info("مصادر البيانات المجانية قد تكون متأخرة أو محدودة. لا تُعامل الأسعار على أنها لحظية ما لم يؤكد مزود البيانات ذلك.")
-    st.metric("الأسهم المختارة", len(symbols))
+    st.metric("الرموز المكتشفة", len(options))
+    st.metric("الأسهم المختارة يدويًا", len(symbols))
     st.caption("ابدأ بفحص الفرص لعرض آخر النتائج ومؤشرات السوق.")
 
 if "scan_results" not in st.session_state:
@@ -69,35 +79,40 @@ if "scan_frames" not in st.session_state:
 
 with tabs[1]:
     st.subheader("ماسح الفرص")
-    if st.button("🔎 فحص الأسهم المختارة", type="primary", disabled=not symbols):
+    scan_symbols = options[int(scan_offset):int(scan_offset)+int(scan_limit)] if auto_scan else symbols
+    if st.button('🔎 بدء فحص الفرص', type='primary', disabled=not scan_symbols):
         rows, frames, errors = [], {}, []
         bar = st.progress(0)
-        for i, sym in enumerate(symbols):
-            try:
-                raw = get_history(sym, period, interval)
-                result = analyze_symbol(sym, raw, style, strategy_choice)
-                if result:
-                    frames[sym] = result.pop("frame")
-                    result["company"] = company_name(sym)
-                    rows.append(result)
-                    if result["score"] >= threshold:
-                        add_alert(sym, result["score"], result["signal"], result["strategy"],
-                                  "؛ ".join(result["reasons"]))
-                else:
-                    errors.append(f"{sym}: بيانات غير كافية")
-            except Exception as exc:
-                errors.append(f"{sym}: {str(exc)[:180]}")
-            bar.progress((i+1)/len(symbols))
+        for start in range(0,len(scan_symbols),15):
+            batch=scan_symbols[start:start+15]
+            histories,batch_errors=get_history_batch(batch,period,interval)
+            errors.extend(batch_errors)
+            for sym in batch:
+                try:
+                    result=analyze_symbol(sym,histories.get(sym),style,strategy_choice)
+                    if result:
+                        frames[sym]=result.pop('frame')
+                        result['company']=universe.get(sym,company_name(sym))
+                        rows.append(result)
+                        if result['score']>=threshold:
+                            add_alert(sym,result['score'],result['signal'],result['strategy'],'؛ '.join(result['reasons']))
+                    elif sym in histories:
+                        errors.append(f'{sym}: insufficient history')
+                except Exception as exc:
+                    errors.append(f'{sym}: {str(exc)[:120]}')
+            bar.progress(min(1.0,(start+len(batch))/len(scan_symbols)))
         bar.empty()
-        rows.sort(key=lambda r: r["score"], reverse=True)
-        st.session_state.scan_results, st.session_state.scan_frames = rows, frames
-        st.session_state.scan_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        rows.sort(key=lambda r:r['score'],reverse=True)
+        st.session_state.scan_results,st.session_state.scan_frames=rows,frames
+        st.session_state.scan_time=datetime.now().strftime('%Y-%m-%d %H:%M')
+        st.session_state.scan_count=len(scan_symbols)
+        st.session_state.scan_failed=len(errors)
         if errors:
-            with st.expander(f"ملاحظات جلب البيانات ({len(errors)})"):
-                st.write("\n".join(errors))
+            with st.expander(f'ملاحظات جلب البيانات ({len(errors)})'):
+                st.write('\n'.join(errors[:200]))
     results = st.session_state.scan_results
     if results:
-        st.caption(f"آخر فحص: {st.session_state.get('scan_time','')}")
+        st.caption(f"آخر فحص: {st.session_state.get('scan_time','')} | المطلوب: {st.session_state.get('scan_count',0)} | ملاحظات: {st.session_state.get('scan_failed',0)}")
         table = pd.DataFrame([{k:v for k,v in r.items() if k not in ("reasons","strategy_key")} for r in results])
         st.dataframe(table, use_container_width=True, hide_index=True)
         cols = st.columns(3)
