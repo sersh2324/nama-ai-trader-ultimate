@@ -20,8 +20,8 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install -r requirements.txt
-streamlit run app.py
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
 ## النشر على Streamlit Community Cloud
@@ -79,3 +79,16 @@ streamlit run app.py
 - تظهر حالة التقدم أثناء الفحص وتوضيحات مصادر دليل الشركات.
 - هذه نسخة تجريبية خضعت لاختبارات محلية؛ لم تُختبر تفاعليًا على Streamlit Cloud أو باستخدام اتصال حي بالبورصات.
 - لا يُضمن اكتمال السوقين بسبب اعتماد اكتشاف الشركات على مزودين خارجيين.
+
+## التحقق من نسخة التطوير
+
+من مجلد المستودع وبعد تفعيل البيئة أعلاه:
+
+```bash
+python -m pip install pytest
+python -m pytest -q
+```
+
+استخدم المفسر نفسه للتثبيت والتشغيل حتى تتوفر تبعيات التطبيق في البيئة الصحيحة.
+الاختبارات الآلية تستخدم بيانات محلية أو محاكاة للمزود. اختبار الاتصال الفعلي
+بدليلَي السوقين وبمزود الأسعار يُجرى بصورة مستقلة.

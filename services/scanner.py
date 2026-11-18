@@ -6,10 +6,12 @@ def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto
     if raw is None or raw.empty or len(raw) < 60:
         return None
     frame = add_indicators(raw)
-    if frame.empty:
+    if len(frame) < 60:
         return None
     row = frame.iloc[-1]
     price = float(row["Close"])
+    if not np.isfinite(price) or price <= 0:
+        return None
     atr = float(row["ATR"]) if row["ATR"] == row["ATR"] and row["ATR"] > 0 else price * .025
     if selected_strategy == "auto":
         candidates = [evaluate_strategy(frame, key) for key in STRATEGIES]
