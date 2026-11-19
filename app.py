@@ -2,6 +2,8 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from services.charts import price_chart
+from services.indicators import add_indicators
 from services.market_data import get_history, get_history_batch, get_fundamentals_news
 from services.universe import discover
 from services.scanner import analyze_symbol
@@ -9,21 +11,38 @@ from services.backtest import run_backtest
 from services.risk_manager import position_size
 from services.portfolio import (initialize, add_trade, get_trades, clear_trades,
                                 add_alert, get_alerts, clear_alerts, add_watch, get_watchlist)
-from services.symbols import company_name
+from services.symbols import SA, US, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 
-VERSION = "1.2.1-beta"
+VERSION = "1.3.0-beta"
 st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
 initialize()
 
-st.title("📈 NAMA AI Trader Ultimate")
-st.caption(f"الإصدار {VERSION} | تحليل هجين للأسهم الأمريكية والسعودية | إشارات يدوية مع قابلية تنفيذ آلي مستقبلًا")
+st.markdown("""
+<style>
+.nama-banner {
+    color: #f1f7fc;
+    background: linear-gradient(110deg, #111f33, #163c42);
+    border: 1px solid #40776e;
+    border-radius: 16px;
+    padding: clamp(16px, 3vw, 30px);
+    margin-bottom: 1rem;
+    text-align: right;
+}
+.nama-banner h1 { color: inherit; font-size: clamp(26px, 5vw, 42px); padding: 0; }
+.nama-banner p { color: #cae3e5; margin: .45rem 0 0; }
+</style>
+<div class="nama-banner">
+  <h1>NAMA AI Trader</h1>
+  <p dir="rtl">تحليل الأسهم السعودية والأمريكية · تنفيذ الصفقات يدوي</p>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("إعدادات السوق")
     market = st.radio("السوق", ["الأمريكي", "السعودي", "السوقان معًا"], key="market")
-    style = st.selectbox("نمط التداول", ["مضاربة يومية", "سوينغ", "استثمار طويل الأجل"])
+    style = st.selectbox("نمط التداول", ["مضاربة يومية", "سوينغ", "استثمار طويل الأجل"], index=1)
     if style == "مضاربة يومية":
         interval = st.selectbox("الإطار الزمني", ["5m","15m","30m","60m"], index=1)
         period = st.selectbox("الفترة المتاحة", ["5d","30d","60d"], index=1)
@@ -45,27 +64,43 @@ def load_universe(market_name):
 
 with st.spinner('جارٍ تحميل دليل الأسهم...'):
     universe, discovery_warnings = load_universe(market)
-options = sorted(universe)
-# Search remains available throughout the application.
-query = st.text_input('بحث باسم الشركة أو الرمز', placeholder='أرامكو أو Apple أو AAPL أو 2222').strip().casefold()
-matches = [sym for sym in options if query in sym.casefold() or query in universe[sym].casefold()] if query else options
-visible = matches[:250]
-if len(matches) > 250:
-    st.caption(f'تظهر 250 نتيجة من {len(matches)}؛ اكتب اسمًا أو رمزًا لتضييق البحث.')
-selected = st.multiselect('الأسهم للتحليل اليدوي', visible, default=[],
-                          format_func=lambda sym: f'{universe[sym]} ({sym})', max_selections=100)
-manual = st.text_input('إضافة رموز أخرى (افصل بينها بفاصلة)', '')
-manual_symbols = []
-for value in manual.split(','):
-    symbol = value.strip().upper()
-    if symbol.isascii() and symbol.isdigit() and len(symbol) in (4, 5) and market != "الأمريكي":
-        symbol += ".SR"
-    if symbol:
-        manual_symbols.append(symbol)
-symbols = list(dict.fromkeys(selected + manual_symbols))[:100]
-analysis_options = list(dict.fromkeys(symbols + visible + options[:1]))
 def company_label(symbol):
-    return f"{universe.get(symbol, company_name(symbol))} ({symbol})"
+    primary = universe.get(symbol, symbol)
+    alias = company_name(symbol)
+    if alias != symbol and alias != primary:
+        if alias.startswith(primary + " — "):
+            primary = alias
+        else:
+            primary = f"{primary} · {alias}"
+    return f"{primary} ({symbol})"
+
+
+options = sorted(universe)
+popular = list(dict.fromkeys([*US, *SA]))
+picker_options = [symbol for symbol in popular if symbol in universe]
+picker_options.extend(symbol for symbol in options if symbol not in US and symbol not in SA)
+with st.container(border=True):
+    st.subheader("دليل الأسهم")
+    if discovery_warnings:
+        st.caption(f"{market} · {len(options):,} رمز متاح · قد تكون التغطية جزئية")
+    else:
+        st.caption(f"{market} · {len(options):,} رمز متاح")
+    with st.expander("اختيار عدة أسهم للماسح أو إضافة رمز"):
+        selected = st.multiselect("أسهم الماسح اليدوي", picker_options,
+                                  format_func=company_label, max_selections=100)
+        manual = st.text_input("إضافة رموز أخرى (افصل بينها بفاصلة)", "")
+    manual_symbols = []
+    for value in manual.split(','):
+        symbol = value.strip().upper()
+        if symbol.isascii() and symbol.isdigit() and len(symbol) in (4, 5) and market != "الأمريكي":
+            symbol += ".SR"
+        if symbol:
+            manual_symbols.append(symbol)
+    symbols = list(dict.fromkeys(selected + manual_symbols))[:100]
+    analysis_options = list(dict.fromkeys(picker_options + manual_symbols))
+    detail_symbol = st.selectbox("بحث باسم الشركة أو الرمز", analysis_options,
+                                 format_func=company_label, key="detail_sym",
+                                 help="افتح القائمة واكتب اسم الشركة أو رمزها، ثم افتح تبويب تحليل السهم.")
 if discovery_warnings:
     with st.expander('حالة تحميل دليل الشركات — مصادر بديلة أو أخطاء'):
         for warning in discovery_warnings:
@@ -77,9 +112,10 @@ with tabs[0]:
     st.subheader("لوحة السوق")
     st.write(f"السوق: **{market}** | نمط التداول: **{style}** | الإطار: **{interval}**")
     st.info("مصادر البيانات المجانية قد تكون متأخرة أو محدودة. لا تُعامل الأسعار على أنها لحظية ما لم يؤكد مزود البيانات ذلك.")
-    st.metric("الرموز المتاحة", len(options))
-    st.metric("الأسهم المختارة يدويًا", len(symbols))
-    st.caption("افتح تبويب اكتشاف الفرص؛ ستجد إعدادات الفحص التلقائي والزر في مكان واحد.")
+    market_metrics = st.columns(3)
+    market_metrics[0].metric("الرموز المتاحة", f"{len(options):,}")
+    market_metrics[1].metric("أسهم الماسح اليدوي", len(symbols))
+    market_metrics[2].metric("السهم المختار", detail_symbol or "—")
 
 with tabs[1]:
     st.subheader('🔎 اكتشاف الفرص — الماسح التلقائي')
@@ -159,34 +195,52 @@ with tabs[1]:
             st.info("لم يتم الفحص بعد.")
 
 with tabs[2]:
-    st.subheader("تحليل سهم بالتفصيل")
-    sym = st.selectbox("السهم", analysis_options, format_func=company_label, key="detail_sym")
-    detail_key = (sym, period, interval)
-    if st.button("تحميل التحليل", disabled=sym is None):
-        st.session_state.pop("detail", None)
-        raw = get_history(sym, period, interval)
-        if raw.empty:
-            st.warning("لم تتوفر بيانات لهذا الرمز والفاصل الزمني.")
-        else:
-            from services.indicators import add_indicators
-            detail = add_indicators(raw)
-            st.session_state.detail = (detail_key, detail)
-    if st.session_state.get("detail") and st.session_state.detail[0] == detail_key:
+    st.subheader(company_label(detail_symbol) if detail_symbol else "تحليل السهم")
+    detail_key = (detail_symbol, period, interval)
+    refresh = st.button("تحميل التحليل", disabled=detail_symbol is None, help="تحديث الأسعار والشارت.")
+    detail_output = st.session_state.get("detail")
+    if detail_symbol and (refresh or not detail_output or detail_output[0] != detail_key):
+        with st.spinner("جارٍ جلب أسعار السهم..."):
+            raw = get_history(detail_symbol, period, interval)
+            st.session_state.detail = (detail_key, add_indicators(raw))
+    if detail_symbol:
         d = st.session_state.detail[1]
-        last = d.iloc[-1]
-        c = st.columns(4)
-        c[0].metric("آخر إغلاق", f"{last['Close']:.4f}")
-        c[1].metric("RSI", f"{last['RSI']:.2f}" if pd.notna(last["RSI"]) else "—")
-        c[2].metric("ATR %", f"{last['ATR_Pct']:.2f}%" if pd.notna(last["ATR_Pct"]) else "—")
-        c[3].metric("ADX", f"{last['ADX']:.2f}" if pd.notna(last["ADX"]) else "—")
-        chart_cols = [x for x in ["Close","EMA20","EMA50","EMA200","BB_Upper","BB_Lower"] if x in d]
-        st.line_chart(d[chart_cols].tail(250))
-        st.dataframe(d.tail(15), use_container_width=True)
+        if d.empty:
+            st.info("لم تتوفر أسعار لهذا الرمز والفاصل. غيّر الفترة أو اضغط تحميل التحليل للمحاولة مجددًا.")
+        else:
+            last = d.iloc[-1]
+            currency = "SAR" if detail_symbol.endswith(".SR") else ("USD" if detail_symbol in universe else "")
+            c = st.columns(4)
+            c[0].metric("آخر إغلاق", f"{last['Close']:,.2f} {currency}".strip())
+            c[1].metric("RSI", f"{last['RSI']:.2f}" if pd.notna(last["RSI"]) else "—")
+            c[2].metric("ATR %", f"{last['ATR_Pct']:.2f}%" if pd.notna(last["ATR_Pct"]) else "—")
+            c[3].metric("ADX", f"{last['ADX']:.2f}" if pd.notna(last["ADX"]) else "—")
+            st.caption(f"آخر شمعة متاحة {d.index[-1]} · الفاصل {interval} · حتى 250 شمعة")
+            ema = st.checkbox("المتوسطات المتحركة EMA", value=True)
+            bands = st.checkbox("نطاقات بولينجر")
+            overlays = []
+            if ema:
+                overlays.extend([("EMA20", "#e7ae55"), ("EMA50", "#6299ed"), ("EMA200", "#ac84ee")])
+            if bands:
+                overlays.extend([("BB_Upper", "#8e9caf"), ("BB_Lower", "#8e9caf")])
+            st.plotly_chart(price_chart(d, overlays, currency), use_container_width=True,
+                            config={"displaylogo": False, "scrollZoom": True}, key="price_chart")
+            match = next((row for row in results if row["symbol"] == detail_symbol), None)
+            if match:
+                levels = st.columns(4)
+                levels[0].metric("إشارة الماسح", match["signal"])
+                levels[1].metric("دخول مرجعي", f"{match['entry']:,.2f}")
+                levels[2].metric("وقف الخسارة", f"{match['stop']:,.2f}")
+                levels[3].metric("الهدف", f"{match['target']:,.2f}")
+            with st.expander("آخر 15 شمعة والمؤشرات"):
+                st.dataframe(d.tail(15), use_container_width=True)
+
+tool_options = list(dict.fromkeys(([detail_symbol] if detail_symbol else []) + analysis_options))
 
 with tabs[3]:
     st.subheader("خطة الصفقة وإدارة المخاطر")
     result_symbols = [r["symbol"] for r in results]
-    sym = st.selectbox("السهم", list(dict.fromkeys(result_symbols + analysis_options)), format_func=company_label, key="plan_sym")
+    sym = st.selectbox("السهم", list(dict.fromkeys(([detail_symbol] if detail_symbol else []) + result_symbols + analysis_options)), format_func=company_label, key="plan_sym")
     found = next((r for r in results if r["symbol"] == sym), None)
     p0 = found["price"] if found else 100.0
     e0 = found["entry"] if found else p0
@@ -243,7 +297,7 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("الاختبار التاريخي")
-    bt_sym = st.selectbox("رمز الاختبار", analysis_options, format_func=company_label, key="bt_sym")
+    bt_sym = st.selectbox("رمز الاختبار", tool_options, format_func=company_label, key="bt_sym")
     bt_strategy = st.selectbox("استراتيجية الاختبار", list(STRATEGIES), format_func=lambda x: STRATEGIES[x])
     bt_period = st.selectbox("فترة الاختبار", ["1y","2y","5y"], index=2)
     bt_interval = st.selectbox("فاصل الاختبار", ["1d","1wk"], index=0)
@@ -282,7 +336,7 @@ with tabs[5]:
 
 with tabs[6]:
     st.subheader("الأخبار والبيانات الأساسية")
-    news_sym = st.selectbox("السهم", analysis_options, format_func=company_label, key="news_sym")
+    news_sym = st.selectbox("السهم", tool_options, format_func=company_label, key="news_sym")
     if st.button("تحميل الأخبار والأساسيات", disabled=news_sym is None):
         info, news = get_fundamentals_news(news_sym)
         st.session_state.news_data = (news_sym, info, news)
@@ -326,4 +380,4 @@ with tabs[7]:
         st.dataframe(watch, use_container_width=True, hide_index=True)
 
 st.divider()
-st.caption("NAMA AI Trader Ultimate — نظام تحليلي تعليمي. بيانات مجانية قد تكون متأخرة أو غير مكتملة. ليست توصية مالية أو ضماناً للربح. التداول الحقيقي الآلي غير مفعل.")
+st.caption(f"NAMA AI Trader · {VERSION} — نظام تحليلي تعليمي. بيانات مجانية قد تكون متأخرة أو غير مكتملة. ليست توصية مالية أو ضماناً للربح. التداول الحقيقي الآلي غير مفعل.")

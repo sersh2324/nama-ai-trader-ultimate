@@ -19,7 +19,9 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
     from services import market_data, portfolio, universe
 
     monkeypatch.setattr(portfolio, "DB_PATH", tmp_path / "test.db")
-    monkeypatch.setattr(universe, "discover_us", lambda: ({"AAPL": "Apple"}, []))
+    us_directory = {f"A{i:03}": f"Company {i}" for i in range(260)}
+    us_directory.update({"AAPL": "Apple", "ZZZ": "Last test company"})
+    monkeypatch.setattr(universe, "discover_us", lambda: (us_directory, []))
     monkeypatch.setattr(universe, "discover_sa", lambda: ({"2222.SR": "أرامكو"}, []))
     index = pd.date_range("2025-01-01", periods=90, freq="D")
     close = pd.Series(range(100, 190), index=index, dtype=float)
@@ -37,7 +39,16 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
 
     assert not app.exception
     assert len(app.tabs) == 8
-    assert app.selectbox(key="detail_sym").value == "AAPL"
+    directory = app.selectbox(key="detail_sym")
+    assert directory.value == "AAPL"
+    assert any("ZZZ" in option for option in directory.options)
+    assert len(app.get("plotly_chart")) == 1
+    directory.select("ZZZ").run()
+    assert not app.exception
+    assert app.session_state["detail"][0][0] == "ZZZ"
+    app.selectbox(key="detail_sym").select("AAPL").run()
+    app.radio(key="scan_mode").set_value("يدوي — الأسهم المختارة").run()
+    app.multiselect[0].select("AAPL").run()
     button("🔎 بدء فحص الفرص").click().run()
     assert not app.exception
     assert app.session_state["scan_output"][1][0]["symbol"] == "AAPL"
@@ -45,6 +56,7 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
     assert not app.exception
     assert app.selectbox(key="plan_sym").value == "2222.SR"
     assert any(item.value == "لم يتم الفحص بعد." for item in app.info)
+    app.radio(key="scan_mode").set_value("تلقائي — دون اختيار أسهم").run()
     button("🔎 بدء فحص الفرص").click().run()
     assert not app.exception
     assert app.session_state["scan_output"][1][0]["symbol"] == "2222.SR"

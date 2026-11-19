@@ -1,5 +1,6 @@
 from __future__ import annotations
 import csv, io, re, requests
+import yfinance as yf
 from services.symbols import US, SA
 
 def discover_us():
@@ -27,7 +28,43 @@ def discover_us():
         companies = {**US, **companies}
     return companies,warnings
 
+def _yahoo_sa_directory():
+    query = yf.EquityQuery("eq", ["exchange", "SAU"])
+    page_size = 250
+    companies = {}
+    for offset in range(0, 1_000, page_size):
+        page = yf.screen(query, offset=offset, size=page_size, sortField="ticker", sortAsc=True)
+        rows = page.get("quotes") or []
+        total = page.get("total")
+        if not isinstance(rows, list) or not rows or not isinstance(total, int):
+            raise ValueError("Unexpected Saudi directory response")
+        for quote in rows:
+            if not isinstance(quote, dict):
+                continue
+            symbol = quote.get("symbol")
+            name = quote.get("longName") or quote.get("shortName")
+            if (isinstance(symbol, str) and re.fullmatch(r"[0-9]{4,5}\.SR", symbol)
+                    and quote.get("quoteType") == "EQUITY" and isinstance(name, str) and name.strip()):
+                companies[symbol] = name.strip()
+        if offset + len(rows) >= total:
+            return companies
+        if len(rows) < page_size:
+            break
+    raise ValueError("Incomplete Saudi directory response")
+
+
 def discover_sa():
+    try:
+        companies = _yahoo_sa_directory()
+        if companies:
+            return {**SA, **companies}, []
+    except Exception:
+        pass
+    companies, warnings = _discover_sa_sahmk()
+    return companies, ["تعذّر تحميل دليل السعودية من Yahoo Finance."] + warnings
+
+
+def _discover_sa_sahmk():
     companies, warnings={},[]
     for market in ('TASI','NOMU'):
         try:
