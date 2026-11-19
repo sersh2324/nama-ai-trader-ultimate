@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def price_chart(history, overlays, currency):
+def price_chart(history, overlays, currency, levels=None, title=None):
     bars = history.tail(250)
     candles = bars.dropna(subset=["Open"])
     figure = make_subplots(
@@ -38,4 +38,18 @@ def price_chart(history, overlays, currency):
     figure.update_xaxes(rangeslider_visible=False)
     figure.update_yaxes(title_text=currency, side="right", fixedrange=False, row=1, col=1)
     figure.update_yaxes(title_text="الحجم", side="right", fixedrange=True, row=2, col=1)
+    if levels:
+        figure.add_hrect(y0=levels["trigger"], y1=levels["entry_ceiling"],
+                         fillcolor="#3B82F6", opacity=0.16, line_width=0, row=1, col=1)
+        for key, label, color in (
+            ("trigger", "بداية منطقة الدخول", "#3B82F6"),
+            ("entry_ceiling", "نهاية منطقة الدخول", "#3B82F6"),
+            ("invalidation", "إلغاء الفكرة", down),
+            ("objective", "هدف السيناريو", up),
+        ):
+            figure.add_hline(y=levels[key], line_dash="dot", line_color=color,
+                             annotation_text=f"{label} · {levels[key]:,.4f}",
+                             annotation_position="top left", row=1, col=1)
+    if title:
+        figure.update_layout(title_text=title, margin_t=66)
     return figure
