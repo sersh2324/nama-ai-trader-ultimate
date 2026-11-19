@@ -7,14 +7,14 @@ def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
                  fee_pct=0.15, slippage_pct=0.10, stop_atr=1.5, target_atr=2.5):
     empty = {"trades": 0, "win_rate_pct": 0.0, "net_return_pct": 0.0,
              "max_drawdown_pct": 0.0, "profit_factor": 0.0, "expectancy_pct": 0.0}
-    if raw is None or len(raw) < 100:
+    if raw is None or len(raw) < 61:
         return pd.DataFrame(), empty
-    d = add_indicators(raw).dropna(subset=["ATR","RSI","EMA20","EMA50"])
-    trades, i = [], 60
+    d = add_indicators(raw)
+    trades, i = [], 59
     costs = (fee_pct + slippage_pct) / 100.0
-    while i < len(d) - 2:
+    while i + 1 < len(d):
         sig = evaluate_strategy(d.iloc[:i+1], strategy)
-        if sig["score"] < threshold or sig["signal"] != "BUY":
+        if sig["score"] < threshold:
             i += 1
             continue
         entry_i = i + 1
@@ -25,26 +25,27 @@ def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
             continue
         stop, target = max(0, entry-stop_atr*atr), entry+target_atr*atr
         end_i = min(entry_i + horizon - 1, len(d)-1)
-        exit_price, exit_i, reason = float(d["Close"].iloc[end_i]), end_i, "Ø§ÙØªÙØ§Ø¡ ÙØ¯Ø© Ø§ÙØ§Ø­ØªÙØ§Ø¸"
+        exit_price, exit_i = float(d["Close"].iloc[end_i]), end_i
+        reason = "انتهاء مدة الاحتفاظ" if end_i == entry_i + horizon - 1 else "نهاية البيانات"
         for j in range(entry_i, end_i+1):
             op, lo, hi = map(float, (d["Open"].iloc[j], d["Low"].iloc[j], d["High"].iloc[j]))
-            if op <= stop:
-                exit_price, exit_i, reason = op, j, "ÙÙÙ Ø¨Ø¹Ø¯ ÙØ¬ÙØ©"
+            if 0 < op <= stop:
+                exit_price, exit_i, reason = op, j, "وقف بعد فجوة"
                 break
             if op >= target:
-                exit_price, exit_i, reason = target, j, "ÙØ¯Ù Ø¨Ø¹Ø¯ ÙØ¬ÙØ©"
+                exit_price, exit_i, reason = target, j, "هدف بعد فجوة"
                 break
             # Conservative assumption if stop and target both hit in same candle.
             if lo <= stop:
-                exit_price, exit_i, reason = stop, j, "ÙÙÙ Ø§ÙØ®Ø³Ø§Ø±Ø©"
+                exit_price, exit_i, reason = stop, j, "وقف الخسارة"
                 break
             if hi >= target:
-                exit_price, exit_i, reason = target, j, "ØªØ­ÙÙ Ø§ÙÙØ¯Ù"
+                exit_price, exit_i, reason = target, j, "تحقق الهدف"
                 break
         ret = (exit_price / entry - 1) - costs
-        trades.append({"signal_date": str(d.index[i].date()),
-                       "entry_date": str(d.index[entry_i].date()),
-                       "exit_date": str(d.index[exit_i].date()),
+        trades.append({"signal_date": str(d.index[i]),
+                       "entry_date": str(d.index[entry_i]),
+                       "exit_date": str(d.index[exit_i]),
                        "entry": entry, "exit": exit_price,
                        "return_pct": ret*100, "reason": reason,
                        "holding_bars": exit_i-entry_i+1,
@@ -62,6 +63,6 @@ def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
     stats = {"trades": len(t), "win_rate_pct": round(float((rets>0).mean()*100),2),
              "net_return_pct": round(float((equity[-1]-1)*100),2),
              "max_drawdown_pct": round(float(dd.min()*100),2),
-             "profit_factor": round(float(pf),2) if np.isfinite(pf) else "â",
+             "profit_factor": round(float(pf),2) if np.isfinite(pf) else "∞",
              "expectancy_pct": round(float(rets.mean()*100),3)}
     return t, stats
