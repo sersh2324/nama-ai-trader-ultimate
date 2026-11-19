@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from services.charts import price_chart
+from services.opportunity_ui import show_opportunity
 from services.indicators import add_indicators
 from services.market_data import get_history, get_history_batch, get_fundamentals_news
 from services.universe import discover
@@ -106,9 +107,10 @@ if discovery_warnings:
         for warning in discovery_warnings:
             st.warning(warning)
 
-tabs = st.tabs(["لوحة السوق", "اكتشاف الفرص", "تحليل السهم", "خطة الصفقة", "المحفظة", "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات"])
+navigation = st.tabs(["اكتشاف الفرص", "لوحة السوق", "تحليل السهم", "خطة الصفقة", "المحفظة", "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات"])
+market_tab, scanner_tab = navigation[1], navigation[0]
 
-with tabs[0]:
+with market_tab:
     st.subheader("لوحة السوق")
     st.write(f"السوق: **{market}** | نمط التداول: **{style}** | الإطار: **{interval}**")
     st.info("مصادر البيانات المجانية قد تكون متأخرة أو محدودة. لا تُعامل الأسعار على أنها لحظية ما لم يؤكد مزود البيانات ذلك.")
@@ -117,7 +119,7 @@ with tabs[0]:
     market_metrics[1].metric("أسهم الماسح اليدوي", len(symbols))
     market_metrics[2].metric("السهم المختار", detail_symbol or "—")
 
-with tabs[1]:
+with scanner_tab:
     st.subheader('🔎 اكتشاف الفرص — الماسح التلقائي')
     st.caption('جميع إعدادات الماسح وزر بدء الفحص موجودة في هذا التبويب.')
     st.info(f'السوق: {market} | الشركات المتاحة: {len(options)} | الإطار الزمني: {interval}')
@@ -138,7 +140,7 @@ with tabs[1]:
         st.warning('قد تكون القائمة محدودة بسبب تعذر بعض مصادر دليل الشركات. راجع حالة تحميل دليل الشركات أعلاه.')
     scan_key = (market, style, interval, period, strategy_choice, threshold, tuple(scan_symbols))
     if st.button('🔎 بدء فحص الفرص', type='primary', disabled=not scan_symbols):
-        rows, errors = [], []
+        rows, errors, snapshots = [], [], {}
         bar = st.progress(0)
         progress_text = st.empty()
         for start in range(0,len(scan_symbols),15):
@@ -150,7 +152,7 @@ with tabs[1]:
                 try:
                     result=analyze_symbol(sym,histories.get(sym),style,strategy_choice)
                     if result:
-                        result.pop('frame')
+                        snapshots[sym] = result.pop('frame').tail(80).copy()
                         result['company']=universe.get(sym,company_name(sym))
                         rows.append(result)
                         if result['score'] >= threshold:
@@ -163,38 +165,40 @@ with tabs[1]:
         bar.empty()
         progress_text.empty()
         rows.sort(key=lambda r:r['score'],reverse=True)
-        st.session_state.scan_output = (scan_key, rows, errors, datetime.now().strftime('%Y-%m-%d %H:%M'))
+        st.session_state.scan_output = (scan_key, rows, errors, datetime.now().strftime('%Y-%m-%d %H:%M'), snapshots)
     scan_output = st.session_state.get("scan_output")
     scan_completed = scan_output is not None and scan_output[0] == scan_key
     results = []
     if scan_completed:
-        _, results, errors, scan_time = scan_output
+        _, results, errors, scan_time, snapshots = scan_output
         st.caption(f"آخر فحص: {scan_time} | المطلوب: {len(scan_symbols)} | تم تحليله: {len(results)}")
         if errors:
             with st.expander(f'ملاحظات الفحص ({len(errors)})'):
                 st.write('\n'.join(errors[:200]))
     if results:
-        table = pd.DataFrame([{k:v for k,v in r.items() if k not in ("reasons","strategy_key")} for r in results])
-        st.dataframe(table, use_container_width=True, hide_index=True)
-        cols = st.columns(3)
-        cols[0].metric("الأسهم المفحوصة", len(results))
-        cols[1].metric("إشارات شراء محتملة", sum(r["signal"] == "شراء محتمل" for r in results))
-        cols[2].metric("متوسط التقييم", round(sum(r["score"] for r in results)/len(results),1))
-        st.download_button("تنزيل النتائج CSV", table.to_csv(index=False).encode("utf-8-sig"),
-                           "nama_scan_results.csv", "text/csv")
-        st.write("**تفاصيل أسباب الإشارة**")
-        for r in results[:10]:
-            with st.expander(f"{r['company']} ({r['symbol']}) — {r['score']}/100 — {r['signal']}"):
-                st.write("الاستراتيجية:", r["strategy"])
-                st.write("الأسباب:", "؛ ".join(r["reasons"]) or "لا توجد أسباب مؤكدة")
-                st.write(f"الدخول المرجعي: {r['entry']:.4f} | الخروج عند الوقف: {r['stop']:.4f} | الخروج عند الهدف: {r['target']:.4f}")
+        candidates = [r for r in results if r["score"] >= threshold and r["signal"] != "لا توجد إشارة"]
+        if candidates:
+            st.subheader("الفرص المطابقة للفلتر")
+            by_symbol = {r["symbol"]: r for r in candidates}
+            selected_opportunity = st.selectbox("اختر فرصة لعرض الشارت", by_symbol,
+                                                format_func=company_label)
+            show_opportunity(by_symbol[selected_opportunity], snapshots[selected_opportunity], period, interval)
+        else:
+            st.info("اكتمل الفحص. ما ظهرت فرص مطابقة لحد التقييم الحالي.")
+        with st.expander("كل نتائج الفحص"):
+            table = pd.DataFrame([{k: v for k, v in r.items() if k not in ("reasons", "strategy_key")}
+                                  for r in results])
+            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.download_button("تنزيل النتائج CSV", table.to_csv(index=False).encode("utf-8-sig"),
+                               "nama_scan_results.csv", "text/csv")
+
     else:
         if scan_completed:
             st.warning("انتهى الفحص دون نتائج قابلة للعرض. قد تكون الأسعار غير متاحة أو التاريخ غير كافٍ. جرّب 1d وسوينغ، وراجع ملاحظات البيانات.")
         else:
             st.info("لم يتم الفحص بعد.")
 
-with tabs[2]:
+with navigation[2]:
     st.subheader(company_label(detail_symbol) if detail_symbol else "تحليل السهم")
     detail_key = (detail_symbol, period, interval)
     refresh = st.button("تحميل التحليل", disabled=detail_symbol is None, help="تحديث الأسعار والشارت.")
@@ -237,8 +241,9 @@ with tabs[2]:
 
 tool_options = list(dict.fromkeys(([detail_symbol] if detail_symbol else []) + analysis_options))
 
-with tabs[3]:
+with navigation[3]:
     st.subheader("خطة الصفقة وإدارة المخاطر")
+    st.caption("القيم الافتراضية من إعدادات الماسح وإدارة المخاطر. مستويات سيناريو الاختراق تظهر في بطاقة الفرصة.")
     result_symbols = [r["symbol"] for r in results]
     sym = st.selectbox("السهم", list(dict.fromkeys(([detail_symbol] if detail_symbol else []) + result_symbols + analysis_options)), format_func=company_label, key="plan_sym")
     found = next((r for r in results if r["symbol"] == sym), None)
@@ -265,7 +270,7 @@ with tabs[3]:
     else:
         st.warning("تحقق من أن الدخول أعلى من وقف الخسارة.")
 
-with tabs[4]:
+with navigation[4]:
     st.subheader("المحفظة وسجل الصفقات")
     with st.form("add_trade_form", clear_on_submit=True):
         c1,c2,c3 = st.columns(3)
@@ -295,7 +300,7 @@ with tabs[4]:
         st.info("لا توجد صفقات مسجلة حتى الآن.")
     st.caption("قاعدة SQLite محلية. في Streamlit Cloud قد لا تكون الملفات المحلية دائمة عند إعادة نشر التطبيق؛ احتفظ بنسخة CSV أو اربط قاعدة بيانات خارجية لاحقاً.")
 
-with tabs[5]:
+with navigation[5]:
     st.subheader("الاختبار التاريخي")
     bt_sym = st.selectbox("رمز الاختبار", tool_options, format_func=company_label, key="bt_sym")
     bt_strategy = st.selectbox("استراتيجية الاختبار", list(STRATEGIES), format_func=lambda x: STRATEGIES[x])
@@ -334,7 +339,7 @@ with tabs[5]:
                 st.warning("لم ينتج عن هذه الإعدادات أي صفقات.")
     st.caption("الإشارة بعد إغلاق الشمعة والدخول في افتتاح الشمعة التالية. عند لمس الوقف والهدف في الشمعة نفسها يُفترض الوقف أولاً. الاختبار لا يضمن الأداء المستقبلي.")
 
-with tabs[6]:
+with navigation[6]:
     st.subheader("الأخبار والبيانات الأساسية")
     news_sym = st.selectbox("السهم", tool_options, format_func=company_label, key="news_sym")
     if st.button("تحميل الأخبار والأساسيات", disabled=news_sym is None):
@@ -362,7 +367,7 @@ with tabs[6]:
             st.info("لم تتوفر أخبار لهذا الرمز من المصدر المجاني.")
         st.caption("تصنيف العناوين بالكلمات المفتاحية استدلال أولي وليس نموذج فهم لغوي أو توصية.")
 
-with tabs[7]:
+with navigation[7]:
     st.subheader("التنبيهات")
     alerts = get_alerts()
     if not alerts.empty:
