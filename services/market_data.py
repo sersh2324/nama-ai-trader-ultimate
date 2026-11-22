@@ -113,3 +113,18 @@ def get_history_batch(symbols, period="2y", interval="1d", batch_size=15):
             else:
                 histories[symbol] = frame
     return histories, errors
+
+
+def get_option_expirations(symbol):
+    try:
+        return tuple(yf.Ticker(symbol).options)
+    except Exception:
+        return ()
+
+
+def get_option_chain(symbol, expiration):
+    try:
+        chain = yf.Ticker(symbol).option_chain(expiration)
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
+    return chain.calls, chain.puts

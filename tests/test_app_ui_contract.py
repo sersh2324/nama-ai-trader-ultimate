@@ -2,7 +2,7 @@ from pathlib import Path
 
 def test_scanner_controls_live_in_scanner_tab():
     text = Path(__file__).resolve().parents[1].joinpath('app.py').read_text(encoding='utf-8')
-    scanner = text.split('with tabs[1]:', 1)[1].split('with tabs[2]:', 1)[0]
+    scanner = text.split('with scanner_tab:', 1)[1].split('with chart_tab:', 1)[0]
     assert "scan_mode = st.radio" in scanner
     assert "st.button('🔎 بدء فحص الفرص'" in scanner
     assert 'if not scan_symbols:' in scanner
@@ -60,7 +60,51 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
     button("🔎 بدء فحص الفرص").click().run()
     assert not app.exception
     assert app.session_state["scan_output"][1][0]["symbol"] == "2222.SR"
-    for label in ("تحميل التحليل", "تحميل الأخبار والأساسيات", "تشغيل الاختبار التاريخي"):
+    for label in ("تحديث الأسعار", "تحميل الأخبار والأساسيات", "تشغيل الاختبار التاريخي"):
         button(label).click().run()
         assert not app.exception
     assert app.session_state["bt_output"][2]["trades"] > 0
+
+
+def test_opportunity_card_confirmation_and_options(monkeypatch):
+    import pandas as pd
+    from streamlit.testing.v1 import AppTest
+
+    from services import opportunity_ui
+
+    def bars(closes, start):
+        frame = pd.DataFrame({"Close": closes, "Open": closes, "Volume": 1000},
+                             index=pd.date_range(start, periods=len(closes)))
+        frame["High"] = frame["Close"] + 1
+        frame["Low"] = frame["Close"] - 1
+        return frame
+
+    opportunity = bars([50] * 30, "2025-01-01")
+    later = bars([51.2, 51.3], "2025-01-31")
+    monkeypatch.setattr(opportunity_ui, "get_history", lambda *_: later)
+    monkeypatch.setattr(opportunity_ui, "get_option_expirations", lambda _: ("2025-02-21",))
+    options = pd.DataFrame([{"contractSymbol": "TEST250221C00050000", "strike": 50,
+                             "bid": 1.1, "ask": 1.2, "contractSize": "REGULAR"}])
+    monkeypatch.setattr(opportunity_ui, "get_option_chain", lambda *_: (options, options.iloc[:0]))
+    monkeypatch.setattr(opportunity_ui, "explain_opportunity", lambda _: "شرح تجريبي.")
+
+    monkeypatch.setattr(opportunity_ui, "_test_frame", opportunity, raising=False)
+    app = AppTest.from_string("""
+from services.opportunity_ui import show_opportunity, _test_frame
+show_opportunity({"symbol": "TEST", "price": 50, "reasons": ["اختبار"]},
+                 _test_frame, "1y", "1d")
+""").run()
+
+    def click(label):
+        next(button for button in app.button if button.label == label).click().run()
+        assert not app.exception
+
+    assert not app.exception
+    assert len(app.get("plotly_chart")) == 1
+    click("تابع شرط التأكيد")
+    click("تحقق من الشرط")
+    assert "51.2000" in app.success[0].value
+    click("اشرح الفرصة بالذكاء الاصطناعي")
+    assert any(item.value == "شرح تجريبي." for item in app.markdown)
+    click("تحميل تواريخ العقود")
+    assert app.dataframe[0].value["تكلفة العقد القياسي بالدولار"].iloc[0] == 120
