@@ -3,7 +3,14 @@ import os
 import requests
 
 
-def explain_opportunity(facts):
+OPPORTUNITY_PROMPT = (
+    "اشرح بالعربية للمبتدئ في ثلاث جمل اتجاه السيناريو، شرط التأكيد وإلغاء الفكرة. "
+    "اعتمد فقط على الوقائع المُرسلة. لا تخترع أسعارًا أو أخبارًا أو احتمالات نجاح. "
+    "لا تطلب تنفيذ صفقة ولا تغير أي مستوى."
+)
+
+
+def explain_opportunity(facts, *, prompt=OPPORTUNITY_PROMPT):
     key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("NAMA_OPENAI_MODEL")
     if not key or not model:
@@ -14,11 +21,7 @@ def explain_opportunity(facts):
         json={
             "model": model,
             "messages": [
-                {"role": "system", "content": (
-                    "اشرح بالعربية للمبتدئ في ثلاث جمل اتجاه السيناريو، شرط التأكيد وإلغاء الفكرة. "
-                    "اعتمد فقط على الوقائع المُرسلة. لا تخترع أسعارًا أو أخبارًا أو احتمالات نجاح. "
-                    "لا تطلب تنفيذ صفقة ولا تغير أي مستوى."
-                )},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": facts},
             ],
         },
