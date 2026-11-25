@@ -2,8 +2,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def price_chart(history, overlays, currency, levels=None, title=None, *, zones=None, panel=None, view_key=None):
-    bars = history.tail(250)
+def price_chart(history, overlays, currency, levels=None, title=None, *, zones=None, panel=None, view_key=None, chart_type="شموع",
+                scenario_levels=None, full_range=False):
+    bars = history if full_range else history.tail(250)
     candles = bars.dropna(subset=["Open"])
     rows = 3 if panel else 2
     figure = make_subplots(
@@ -12,9 +13,15 @@ def price_chart(history, overlays, currency, levels=None, title=None, *, zones=N
         vertical_spacing=0.075,
     )
     up, down = "#28B88B", "#F26679"
-    if candles.empty:
+    if candles.empty or chart_type == "خط":
         figure.add_trace(go.Scatter(x=bars.index, y=bars["Close"], name="الإغلاق",
                                     line={"color": up}), row=1, col=1)
+    elif chart_type == "أعمدة سعرية":
+        figure.add_trace(go.Ohlc(
+            x=candles.index, open=candles["Open"], high=candles["High"],
+            low=candles["Low"], close=candles["Close"], name="السعر",
+            increasing_line_color=up, decreasing_line_color=down,
+        ), row=1, col=1)
     else:
         figure.add_trace(go.Candlestick(
             x=candles.index, open=candles["Open"], high=candles["High"],
@@ -64,6 +71,11 @@ def price_chart(history, overlays, currency, levels=None, title=None, *, zones=N
             figure.add_hline(y=levels[key], line_dash="dot", line_color=color,
                              annotation_text=f"{label} · {levels[key]:,.4f}",
                              annotation_position="top left", row=1, col=1)
+    if scenario_levels:
+        for label, price, color in scenario_levels:
+            figure.add_hline(y=price, line_dash="dot", line_color=color,
+                             annotation_text=f"{label} · {price:,.2f}",
+                             annotation_position="top right", row=1, col=1)
     if zones:
         for key, label, color in (
             ("support", "دعم", "#28B88B"),

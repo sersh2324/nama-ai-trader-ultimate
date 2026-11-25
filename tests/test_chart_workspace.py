@@ -132,6 +132,7 @@ def test_chart_first_ai_indicators_and_source_switch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(alpaca_data, "get_alpaca_history", alpaca_history)
     monkeypatch.setattr(market_data, "get_history", lambda *_: bars(range(200, 270)))
+    monkeypatch.setattr(market_data, "get_fundamentals_news", lambda _: ({}, []))
 
     def explain(facts, *, prompt):
         assert json.loads(facts)["symbol"] == "AAPL"
@@ -155,8 +156,18 @@ def test_chart_first_ai_indicators_and_source_switch(monkeypatch, tmp_path):
     next(widget for widget in app.selectbox if widget.label == "نطاق البيانات").select("1y").run()
     assert history_calls[-1] == ("AAPL", "1y", "1wk")
     button("حلّل بالذكاء الاصطناعي").click().run()
-    assert len(chart()["layout"]["shapes"]) == 2
+    assert len(chart()["layout"]["shapes"]) == 6
+    next(widget for widget in app.selectbox if widget.label == "نوع الشارت").select("خط").run()
+    assert chart()["data"][0]["type"] == "scatter"
+    next(widget for widget in app.selectbox if widget.label == "نوع الشارت").select("أعمدة سعرية").run()
+    assert chart()["data"][0]["type"] == "ohlc"
     assert any(item.value == "شرح تجريبي للمستويات" for item in app.markdown)
+    app.toggle(key="chart_historical").set_value(True).run()
+    date_picker = next(widget for widget in app.date_input if widget.label.startswith("نطاق تاريخ الشارت"))
+    dates = app.session_state.detail[1].index.date
+    date_picker.set_value((dates[-10], dates[-1])).run()
+    assert len(chart()["data"][0]["x"]) == 10
+    app.toggle(key="chart_historical").set_value(False).run()
     app.checkbox(key="chart_bands").check().run()
     next(widget for widget in app.selectbox if widget.label == "مؤشر إضافي").select("RSI").run()
     assert {"EMA20", "BB_Upper", "RSI"} <= {trace["name"] for trace in chart()["data"]}
@@ -236,3 +247,34 @@ def test_options_provider_failure(monkeypatch):
     assert market_data.get_option_expirations("AAPL") == ()
     calls, puts = market_data.get_option_chain("AAPL", "2025-03-21")
     assert calls.empty and puts.empty
+
+
+
+def test_tracks_confirmation_targets_and_invalidation_from_closed_bars():
+    from services.chart_analysis import track_scenario
+
+    frame = bars([100, 104, 106, 109, 94])
+    frame.loc[frame.index[1], "High"] = 108
+    scenario = {"as_of": str(frame.index[0]), "setups": {
+        "صعود": {"trigger": 105, "invalidation": 95, "targets": [108, 120]},
+        "هبوط": {"trigger": 95, "invalidation": 105, "targets": [90]},
+    }}
+    assert track_scenario(scenario, "صعود", frame.iloc[:2], last_bar_closed=True)["state"] == "بانتظار التأكيد"
+    pending = track_scenario(scenario, "صعود", frame)
+    assert pending["state"] == "تأكد"
+    assert pending["targets"][0]["reached_at"] == str(frame.index[3])
+    closed = track_scenario(scenario, "صعود", frame, last_bar_closed=True)
+    assert closed["state"] == "ألغي"
+    assert closed["targets"][1]["reached_at"] is None
+
+
+def test_chart_news_uses_only_dated_headlines_known_by_cutoff():
+    from services.chart_analysis import recent_chart_news
+
+    articles = [{"title": title, "date": date, "source": "Feed", "url": None}
+                for title, date in [("Profit growth", "2026-11-24"), ("Profit growth", "2026-11-24"),
+                                    ("Old loss", "2026-10-01"), ("Future upgrade", "2026-11-26"),
+                                    ("Undated report", "")]]
+    evidence = recent_chart_news(articles, "2026-11-25")
+    assert [item["title"] for item in evidence] == ["Profit growth"]
+    assert evidence[0]["tone"] == "إيجابي مبدئي"

@@ -1,12 +1,13 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from time import monotonic
 import pandas as pd
 import requests
 import streamlit as st
 
 from services.alpaca_data import alpaca_available, get_alpaca_history
-from services.chart_analysis import chart_scenario
+from services.chart_analysis import (chart_scenario, last_chart_bar_closed, recent_chart_news,
+                                     scenario_details, track_scenario)
 from services.charts import price_chart
 from services.opportunity_explanation import explain_opportunity
 from services.opportunity_ui import show_opportunity
@@ -24,9 +25,9 @@ from services.news_engine import classify_headline
 
 VERSION = "1.4.0-beta"
 CHART_PROMPT = (
-    "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة في ثلاث جمل قصيرة. "
+    "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة والأخبار المعروضة إن وجدت. "
     "اعتمد حصراً على القيم الواردة. اذكر أن السيناريو مشروط بالإغلاق خارج النطاق. "
-    "لا تخترع مستويات أو أهدافاً أو أخباراً ولا تطلب تنفيذ صفقة."
+    "صف الخبر كمحفز محتمل، ولا تنسب إليه حركة السعر من دون دليل. لا تخترع أهدافاً أو أخباراً."
 )
 st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
 initialize()
@@ -234,15 +235,18 @@ with chart_tab:
         bands = controls.checkbox("نطاقات بولينجر", key="chart_bands")
         panel = controls.selectbox("مؤشر إضافي", [None, "RSI", "MACD"],
                                       format_func=lambda value: value or "بدون")
+        chart_type = controls.selectbox("نوع الشارت", ["شموع", "خط", "أعمدة سعرية"])
         live = (controls.checkbox("تحديث كل 30 ثانية", value=True, key="chart_live")
-                if can_refresh_live else False)
+                if can_refresh_live else controls.checkbox("متابعة الأسعار كل دقيقتين", value=False))
+        historical = st.toggle("اختيار تاريخ البداية والنهاية", key="chart_historical")
+        poll_interval = ("30s" if can_refresh_live else "120s") if live and not historical else None
         overlays = []
         if ema:
             overlays.extend([("EMA20", "#e7ae55"), ("EMA50", "#6299ed"), ("EMA200", "#ac84ee")])
         if bands:
             overlays.extend([("BB_Upper", "#8e9caf"), ("BB_Lower", "#8e9caf")])
 
-        @st.fragment(run_every="30s" if live else None)
+        @st.fragment(run_every=poll_interval)
         def show_stock_chart():
             detail_key = (detail_symbol, period, interval)
             actions = st.columns([1, 2])
@@ -250,13 +254,17 @@ with chart_tab:
             analyze = actions[1].button("حلّل بالذكاء الاصطناعي", type="primary")
             detail = st.session_state.get("detail")
             fetched_at = st.session_state.get("chart_fetched_at", 0)
-            if refresh or not detail or detail[0] != detail_key or (live and monotonic() - fetched_at >= 29):
+            if refresh or not detail or detail[0] != detail_key or (poll_interval and monotonic() - fetched_at >= (29 if can_refresh_live else 119)):
                 with st.spinner("جارٍ جلب أسعار السهم..."):
                     raw, feed = get_alpaca_history(detail_symbol, period, interval)
                     if raw.empty:
                         raw = get_history(detail_symbol, period, interval)
-                    detail = (detail_key, add_indicators(raw), feed)
-                    st.session_state.detail = detail
+                    stale = raw.empty and detail and detail[0] == detail_key and not detail[1].empty
+                    if not stale:
+                        detail = (detail_key, add_indicators(raw), feed)
+                        st.session_state.detail = detail
+                        st.session_state.chart_received_at = datetime.now(timezone.utc)
+                    st.session_state.chart_stale = bool(stale)
                     st.session_state.chart_fetched_at = monotonic()
 
             _, frame, feed = detail
@@ -266,22 +274,53 @@ with chart_tab:
 
             currency = "SAR" if detail_symbol.endswith(".SR") else "USD"
             source = f"Alpaca · {feed.upper()}" if feed else "Yahoo Finance · قد تتأخر البيانات"
-            last = frame.iloc[-1]
+            analysis_frame = frame
+            display_frame = frame
+            date_range = None
+            if historical:
+                dates = frame.index.date
+                date_range = st.date_input(
+                    "نطاق تاريخ الشارت ضمن البيانات المحمّلة", (dates[0], dates[-1]),
+                    min_value=dates[0], max_value=dates[-1], key=f"chart_dates_{detail_key}",
+                )
+                if len(date_range) != 2:
+                    st.info("اختر تاريخ البداية والنهاية.")
+                    return
+                analysis_frame = frame.loc[dates <= date_range[1]]
+                display_frame = frame.loc[(dates >= date_range[0]) & (dates <= date_range[1])]
+                if display_frame.empty:
+                    st.info("لا توجد شموع ضمن هذا النطاق.")
+                    return
+            last = display_frame.iloc[-1]
             metrics = st.columns(3)
-            metrics[0].metric("آخر سعر داخل الشمعة", f"{last['Close']:,.2f} {currency}")
+            metrics[0].metric("إغلاق آخر شمعة معروضة" if historical else "آخر سعر داخل الشمعة", f"{last['Close']:,.2f} {currency}")
             for metric, column in zip(metrics[1:], ("RSI", "ADX")):
                 metric.metric(column, f"{last[column]:.2f}" if pd.notna(last[column]) else "—")
-            st.caption(f"{source} · بداية آخر شمعة {frame.index[-1]} · الفاصل {interval}")
+            received_at = st.session_state.chart_received_at
+            st.caption(f"{source} · بداية آخر شمعة معروضة {display_frame.index[-1]} · "
+                       f"آخر جلب ناجح {received_at:%H:%M:%S} UTC · الفاصل {interval}")
+            if st.session_state.chart_stale:
+                st.warning("تعذّر تحديث السعر. تظهر آخر بيانات متاحة.")
             if can_refresh_live and not feed:
                 st.info("تعذّرت بيانات Alpaca لهذا السهم أو الفاصل. الشارت يعرض المصدر البديل.")
 
-            analysis_key = (detail_key, feed)
+            analysis_key = (detail_key, feed, date_range)
+            market_zone = "Asia/Riyadh" if currency == "SAR" else "America/New_York"
+            bar_start = pd.Timestamp(analysis_frame.index[-1])
+            if bar_start.tz is None:
+                bar_start = bar_start.tz_localize(market_zone)
+            last_closed = last_chart_bar_closed(bar_start, interval, datetime.now(timezone.utc))
             if analyze:
-                scenario = chart_scenario(frame)
+                scenario = chart_scenario(analysis_frame, last_bar_closed=last_closed)
                 if scenario is None:
                     st.info("يلزم 50 شمعة سابقة على الأقل ونطاق سعري صالح لرسم السيناريو.")
                     st.session_state.pop("chart_analysis", None)
                 else:
+                    _, articles = get_fundamentals_news(detail_symbol)
+                    cutoff = datetime.now(timezone.utc)
+                    if historical:
+                        cutoff = min(bar_start, cutoff)
+                    scenario = scenario_details(scenario, analysis_frame, recent_chart_news(articles, cutoff))
                     facts = dict(scenario, symbol=detail_symbol, interval=interval, currency=currency)
                     try:
                         with st.spinner("جارٍ شرح الاتجاه والمستويات..."):
@@ -294,12 +333,50 @@ with chart_tab:
             saved = st.session_state.get("chart_analysis")
             scenario, explanation = saved[1:] if saved and saved[0] == analysis_key else (None, None)
             zones = scenario["zones"] if scenario else None
-            st.plotly_chart(price_chart(frame, overlays, currency, zones=zones, panel=panel,
-                                        view_key=str(analysis_key)), use_container_width=True,
+            direction = None
+            tracking = None
+            chart_levels = []
+            if scenario:
+                preferred = "هبوط" if scenario["trend"] == "هابط" else "صعود"
+                direction = st.selectbox("السيناريو على الشارت", ["صعود", "هبوط"],
+                                         index=int(preferred == "هبوط"), key=f"setup_{analysis_key}")
+                setup = scenario["setups"][direction]
+                tracking = track_scenario(scenario, direction, analysis_frame, last_bar_closed=last_closed)
+                chart_levels = [("التأكيد", setup["trigger"], "#3B82F6"),
+                                ("الإلغاء", setup["invalidation"], "#F26679")]
+                chart_levels.extend((f"الهدف {index}", target, "#28B88B")
+                                    for index, target in enumerate(setup["targets"], 1))
+            st.plotly_chart(price_chart(display_frame, overlays, currency, zones=zones, panel=panel,
+                                        view_key=str(analysis_key), chart_type=chart_type,
+                                        scenario_levels=chart_levels, full_range=historical), use_container_width=True,
                             config={"displaylogo": False, "scrollZoom": True}, key="price_chart")
             if scenario:
                 with st.container(border=True):
-                    st.subheader(f"الاتجاه على الفاصل المختار · {scenario['trend']}")
+                    bias = {"صاعد": "صعود محتمل", "هابط": "هبوط محتمل",
+                            "عرضي أو غير محسوم": "محايد"}[scenario["trend"]]
+                    st.subheader(f"الاتجاه على الفاصل المختار · {bias}")
+                    st.write(scenario["reason"])
+                    if scenario["volume_ratio"] is not None:
+                        st.caption(f"حجم الشمعة المرجعية ÷ متوسط 20 شمعة سابقة · {scenario['volume_ratio']:.2f}")
+                    st.write(f"**{direction} · {tracking['state']}** · {tracking['reason']}")
+                    if tracking["at"]:
+                        st.caption(f"بداية شمعة تغيّر الحالة · {tracking['at']}")
+                    for index, target in enumerate(tracking["targets"], 1):
+                        status = (f"تحقق خلال الشمعة التي بدأت {target['reached_at']}"
+                                  if target["reached_at"] else "لم يُرصد تحققه")
+                        st.write(f"الهدف {index} · {target['price']:,.2f} {currency} · {status}")
+                    st.caption("المتابعة لمدة 20 شمعة مكتملة. الأهداف تُرصد باللمس بعد شمعة التأكيد. "
+                               "للشمعة التي تلغي السيناريو أولوية عند غموض ترتيب الحركة.")
+                    if scenario["news"]:
+                        with st.expander("الأخبار والعوامل المحتملة"):
+                            for article in scenario["news"]:
+                                st.text(f"{article['title']} · {article['tone']}")
+                                st.caption(f"{article['source']} · {article['published']}")
+                                url = article["url"]
+                                if isinstance(url, str) and url.startswith(("https://", "http://")):
+                                    st.link_button("فتح الخبر", url)
+                    else:
+                        st.caption("لا تتوفر أخبار مؤرخة من مزود السهم خلال الأيام السبعة السابقة لوقت التحليل.")
                     support, resistance = zones["support"], zones["resistance"]
                     st.write(f"**الدعم** {support[0]:,.2f}–{support[1]:,.2f}  ·  "
                              f"**المقاومة** {resistance[0]:,.2f}–{resistance[1]:,.2f}")
@@ -319,7 +396,7 @@ with chart_tab:
                     levels[2].metric("وقف الخسارة", f"{match['stop']:,.2f}")
                     levels[3].metric("الهدف", f"{match['target']:,.2f}")
             with st.expander("آخر 15 شمعة والمؤشرات"):
-                st.dataframe(frame.tail(15), use_container_width=True)
+                st.dataframe(display_frame.tail(15), use_container_width=True)
 
         show_stock_chart()
 
