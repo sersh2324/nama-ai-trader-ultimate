@@ -38,7 +38,8 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
         return next(widget for widget in app.button if widget.label == label)
 
     assert not app.exception
-    assert len(app.tabs) == 8
+    assert len(app.tabs) == 9
+    assert [tab.label for tab in app.tabs[:4]] == ["الشارت والتحليل", "اكتشاف الفرص", "المراقبة", "المحفظة"]
     directory = app.selectbox(key="detail_sym")
     assert directory.value == "AAPL"
     assert any("ZZZ" in option for option in directory.options)
@@ -64,6 +65,13 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
         button(label).click().run()
         assert not app.exception
     assert app.session_state["bt_output"][2]["trades"] > 0
+    button("حفظ للمراقبة").click().run()
+    assert portfolio.get_watchlist()["symbol"].tolist() == ["2222.SR"]
+    app.radio(key="market").set_value("الأمريكي").run()
+    button("فتح السهم في الشارت").click().run()
+    assert not app.exception
+    assert app.radio(key="market").value == "السعودي"
+    assert app.selectbox(key="detail_sym").value == "2222.SR"
 
 
 def test_opportunity_card_confirmation_and_options(monkeypatch):
