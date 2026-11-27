@@ -2,7 +2,7 @@ import numpy as np
 from services.indicators import add_indicators
 from strategies.rules import STRATEGIES, evaluate_strategy
 
-def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto"):
+def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto", *, threshold=70):
     if raw is None or raw.empty or len(raw) < 60:
         return None
     frame = add_indicators(raw)
@@ -29,7 +29,7 @@ def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto
     risk = price - stop
     rr = (target - price) / risk if risk > 0 else None
     score = int(best["score"])
-    signal = "شراء محتمل" if score >= 70 else ("مراقبة" if score >= 55 else "لا توجد إشارة")
+    signal = "شراء محتمل" if score >= threshold else ("مراقبة" if score >= 55 else "لا توجد إشارة")
     return {
         "symbol": symbol, "price": price, "score": score, "signal": signal,
         "strategy": best["strategy_ar"], "strategy_key": best["strategy"],
@@ -37,6 +37,7 @@ def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto
         "reasons": best["reasons"], "rsi": float(row["RSI"]) if row["RSI"] == row["RSI"] else None,
         "atr_pct": float(row["ATR_Pct"]) if row["ATR_Pct"] == row["ATR_Pct"] else None,
         "entry": price, "stop": stop, "target": target, "risk_reward": rr,
+        "exit_rule": "الخروج عند وقف الخسارة أو تحقق الهدف.",
         "frame": frame
     }
 

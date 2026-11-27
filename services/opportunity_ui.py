@@ -68,6 +68,12 @@ def show_opportunity(result, frame, period, interval):
         st.write(f"**وش ننتظر؟** إغلاق شمعة فوق {levels['trigger']:,.4f}. الشمعة الأخيرة قد تكون قيد التكوين.")
         st.write(f"**منطقة الدخول بعد التأكيد** · {levels['trigger']:,.4f}–{levels['entry_ceiling']:,.4f}")
         st.write(f"**إلغاء الفكرة** · {levels['invalidation']:,.4f} | **هدف السيناريو** · {levels['objective']:,.4f}")
+        risk_at_trigger = levels["trigger"] - levels["invalidation"]
+        risk_at_ceiling = levels["entry_ceiling"] - levels["invalidation"]
+        rr_at_trigger = (levels["objective"] - levels["trigger"]) / risk_at_trigger
+        rr_at_ceiling = (levels["objective"] - levels["entry_ceiling"]) / risk_at_ceiling
+        st.caption(f"العائد إلى المخاطرة عبر منطقة الدخول · {rr_at_ceiling:.2f}–{rr_at_trigger:.2f} "
+                   "قبل التكاليف. الخروج عند الهدف أو وقف السيناريو عند مستوى الإلغاء.")
         explanation_key = (symbol, interval, frame.index[-1], tuple(levels.items()), tuple(result["reasons"]))
         if st.button("اشرح الفرصة بالذكاء الاصطناعي", key=f"explain-{symbol}"):
             facts = {"symbol": symbol, "interval": interval, "status": status,

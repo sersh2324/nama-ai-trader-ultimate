@@ -49,3 +49,14 @@ def test_none_batch_falls_back_and_accepts_price_first_columns(monkeypatch):
     assert histories["2222.SR"]["Close"].iloc[0] == 100
     assert len(errors) == 1 and errors[0].startswith("MISSING:")
     assert m.get_history("MISSING").empty
+
+
+def test_option_chain_partial_provider_response(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = pd.DataFrame({"strike": [100]})
+    monkeypatch.setattr(m.yf, "Ticker", lambda _: SimpleNamespace(
+        option_chain=lambda _: SimpleNamespace(calls=calls, puts=None)))
+    actual_calls, puts = m.get_option_chain("AAPL", "2026-12-18")
+    assert actual_calls.equals(calls)
+    assert puts.empty

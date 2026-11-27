@@ -306,3 +306,20 @@ def test_workspace_scale_uses_visible_candles_without_hiding_history():
     with_levels = price_chart(frame, [], "SAR", workspace_interval="1d",
                               viewport_bars=30, scenario_levels=levels, fit_levels=True)
     assert with_levels.layout.yaxis.range[1] > 35
+
+
+def test_alpaca_permission_error_is_sanitized(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "test-id")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("NAMA_ALPACA_FEED", "sip")
+
+    def denied(*args, **kwargs):
+        response = requests.Response()
+        response.status_code = 403
+        raise requests.HTTPError("test-secret provider body", response=response)
+
+    monkeypatch.setattr(alpaca_data.requests, "get", denied)
+    frame, feed = alpaca_data.get_alpaca_history("AAPL", "2y", "1d")
+    assert feed is None and frame.empty
+    assert "SIP" in frame.attrs["alpaca_status"]
+    assert "test-secret" not in frame.attrs["alpaca_status"]

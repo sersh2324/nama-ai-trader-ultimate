@@ -24,9 +24,7 @@ def discover_us():
             warnings.append(f'US directory unavailable: {str(exc)[:100]}')
     if not companies:
         warnings.append('Using limited built-in US symbols; full market coverage unavailable.')
-    if warnings:
-        companies = {**US, **companies}
-    return companies,warnings
+    return {**US, **companies}, warnings
 
 def _yahoo_sa_directory():
     query = yf.EquityQuery("eq", ["exchange", "SAU"])
@@ -94,9 +92,7 @@ def _discover_sa_sahmk():
             warnings.append(f'{market} directory unavailable: {str(exc)[:100]}')
     if not companies:
         warnings.append('Using limited built-in Saudi symbols; full market coverage unavailable.')
-    if warnings:
-        companies = {**SA, **companies}
-    return companies,warnings
+    return {**SA, **companies}, warnings
 
 def discover(market):
     result,warnings={},[]

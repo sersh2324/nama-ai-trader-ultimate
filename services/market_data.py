@@ -48,13 +48,14 @@ def _download(symbols, period, interval, **kwargs):
 
 
 def get_history(symbol: str, period="2y", interval="1d") -> pd.DataFrame:
+    symbol = symbol.strip().upper() if isinstance(symbol, str) else ""
     if not symbol:
         return normalize_history(None)
     try:
         raw = _download(symbol, period, interval, threads=False)
     except Exception:
         return normalize_history(None)
-    return normalize_history(raw, symbol.upper())
+    return normalize_history(raw, symbol)
 
 
 def get_fundamentals_news(symbol: str) -> tuple[dict, list]:
@@ -127,4 +128,7 @@ def get_option_chain(symbol, expiration):
         chain = yf.Ticker(symbol).option_chain(expiration)
     except Exception:
         return pd.DataFrame(), pd.DataFrame()
-    return chain.calls, chain.puts
+    return tuple(
+        value if isinstance(value, pd.DataFrame) else pd.DataFrame()
+        for value in (getattr(chain, "calls", None), getattr(chain, "puts", None))
+    )

@@ -10,6 +10,8 @@ def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
     if raw is None or len(raw) < 61:
         return pd.DataFrame(), empty
     d = add_indicators(raw)
+    if len(d) < 61:
+        return pd.DataFrame(), empty
     first_signal = d.index.searchsorted(evaluate_from) if evaluate_from is not None else 59
     trades, i = [], max(59, first_signal)
     costs = (fee_pct + slippage_pct) / 100.0
@@ -47,11 +49,13 @@ def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
         trades.append({"signal_date": str(d.index[i]),
                        "entry_date": str(d.index[entry_i]),
                        "exit_date": str(d.index[exit_i]),
-                       "entry": entry, "exit": exit_price,
+                       "entry": entry, "stop": stop, "target": target, "exit": exit_price,
+                       "risk_reward": (target - entry) / (entry - stop) if entry > stop else None,
+                       "signal_reason": "؛ ".join(sig.get("reasons", [])),
                        "return_pct": ret*100, "reason": reason,
                        "holding_bars": exit_i-entry_i+1,
                        "score": sig["score"]})
-        i = exit_i + 1
+        i = exit_i
     t = pd.DataFrame(trades)
     if t.empty:
         return t, empty
