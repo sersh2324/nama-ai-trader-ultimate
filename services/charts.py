@@ -137,7 +137,7 @@ def style_workspace(figure, timestamps, visible, interval, panel, full_range, ov
     max_volume = float(visible["Volume"].max())
     if isfinite(max_volume) and max_volume > 0:
         figure.update_yaxes(range=[0, max_volume * 1.13], row=2, col=1)
-    bar_minutes = {"5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "1d": 1440}.get(interval)
+    bar_minutes = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "1d": 1440}.get(interval)
     if bar_minutes is None:
         bar_width = (timestamps[-1] - timestamps[-2]) if len(timestamps) > 1 else pd.Timedelta(days=7)
     else:
