@@ -24,7 +24,7 @@ from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 from services.workspace_ui import WORKSPACE_STYLE
 
-VERSION = "1.5.0-beta"
+VERSION = "1.5.1-beta"
 CHART_PROMPT = (
     "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة والأخبار المعروضة إن وجدت. "
     "اعتمد حصراً على القيم الواردة. اذكر أن السيناريو مشروط بالإغلاق خارج النطاق. "
@@ -232,6 +232,7 @@ with chart_tab:
         panel = controls.selectbox("مؤشر إضافي", [None, "RSI", "MACD"],
                                       format_func=lambda value: value or "بدون")
         chart_type = controls.selectbox("نوع الشارت", ["شموع", "خط", "أعمدة سعرية"])
+        fit_levels = controls.checkbox("ضم جميع مستويات السيناريو إلى مقياس السعر")
         live = (controls.checkbox("تحديث كل 30 ثانية", value=True, key="chart_live")
                 if can_refresh_live else controls.checkbox("متابعة الأسعار كل دقيقتين", value=False))
         historical = history_controls.toggle("اختيار تاريخ البداية والنهاية", key="chart_historical")
@@ -339,11 +340,27 @@ with chart_tab:
                                 ("الإلغاء", setup["invalidation"], "#FF8E9D")]
                 chart_levels.extend((f"الهدف {index}", target, "#64E4B5")
                                     for index, target in enumerate(setup["targets"], 1))
-            st.plotly_chart(price_chart(display_frame, overlays, currency, zones=zones, panel=panel,
-                                        view_key=str(analysis_key), chart_type=chart_type,
-                                        scenario_levels=chart_levels, full_range=historical,
-                                        workspace_interval=chart_interval), width="stretch",
-                            theme=None, config={"displaylogo": False, "scrollZoom": True}, key="price_chart")
+            with st.container(horizontal=True, gap="small"):
+                chart_tools = st.popover("أدوات الشارت")
+                if st.button("إعادة ضبط الشارت"):
+                    st.session_state.chart_view_revision = st.session_state.get("chart_view_revision", 0) + 1
+            viewport_bars = chart_tools.selectbox("الشموع في العرض", [30, 60, 120], index=1,
+                                                 disabled=historical,
+                                                 help="يُضبط نطاق السعر على هذه الشموع عند فتح العرض أو إعادة ضبطه.")
+            chart_tool = chart_tools.selectbox("أداة الشارت", ["تحريك", "تكبير منطقة", "رسم خط"],
+                                               key="workspace_chart_tool")
+            interaction = {"تحريك": "pan", "تكبير منطقة": "zoom", "رسم خط": "drawline"}[chart_tool]
+            view_key = (analysis_key, viewport_bars, fit_levels, chart_type, panel, tuple(overlays),
+                        st.session_state.get("chart_view_revision", 0))
+            figure = price_chart(display_frame, overlays, currency, zones=zones, panel=panel,
+                                 view_key=str(view_key), chart_type=chart_type,
+                                 scenario_levels=chart_levels, full_range=historical,
+                                 workspace_interval=chart_interval, viewport_bars=viewport_bars,
+                                 fit_levels=fit_levels, interaction=interaction)
+            st.plotly_chart(figure, width="stretch", theme=None, config={
+                "displaylogo": False, "scrollZoom": True, "doubleClick": "reset",
+                "modeBarButtonsToAdd": ["eraseshape"],
+            }, key="price_chart")
             st.caption(f"{source} · بداية آخر شمعة معروضة {display_frame.index[-1]} · "
                        f"آخر جلب ناجح {received_label} · الفاصل {interval_names[chart_interval]}")
             if st.session_state.chart_stale:
