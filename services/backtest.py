@@ -4,13 +4,14 @@ from services.indicators import add_indicators
 from strategies.rules import evaluate_strategy
 
 def run_backtest(raw, strategy="trend_following", threshold=70, horizon=15,
-                 fee_pct=0.15, slippage_pct=0.10, stop_atr=1.5, target_atr=2.5):
+                 fee_pct=0.15, slippage_pct=0.10, stop_atr=1.5, target_atr=2.5, *, evaluate_from=None):
     empty = {"trades": 0, "win_rate_pct": 0.0, "net_return_pct": 0.0,
              "max_drawdown_pct": 0.0, "profit_factor": 0.0, "expectancy_pct": 0.0}
     if raw is None or len(raw) < 61:
         return pd.DataFrame(), empty
     d = add_indicators(raw)
-    trades, i = [], 59
+    first_signal = d.index.searchsorted(evaluate_from) if evaluate_from is not None else 59
+    trades, i = [], max(59, first_signal)
     costs = (fee_pct + slippage_pct) / 100.0
     while i + 1 < len(d):
         sig = evaluate_strategy(d.iloc[:i+1], strategy)

@@ -63,7 +63,7 @@ def show_opportunity(result, frame, period, interval):
     status = opportunity_status(result["price"], levels)
     with st.container(border=True):
         st.markdown(f"### {symbol} · {status}")
-        st.caption(f"{interval} · {currency} · آخر شمعة لدى المزوّد {frame.index[-1]} · قد تكون البيانات متأخرة")
+        st.caption(f"{interval} · {currency} · Yahoo Finance · آخر شمعة {frame.index[-1]} · قد تكون البيانات متأخرة")
         st.write(f"**ليش ظهر؟** {'؛ '.join(result['reasons']) or 'لا توجد أسباب كافية من الاستراتيجية.'}")
         st.write(f"**وش ننتظر؟** إغلاق شمعة فوق {levels['trigger']:,.4f}. الشمعة الأخيرة قد تكون قيد التكوين.")
         st.write(f"**منطقة الدخول بعد التأكيد** · {levels['trigger']:,.4f}–{levels['entry_ceiling']:,.4f}")

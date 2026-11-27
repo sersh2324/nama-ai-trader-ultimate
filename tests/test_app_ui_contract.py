@@ -66,7 +66,7 @@ def test_streamlit_scan_and_market_switch(monkeypatch, tmp_path):
         assert not app.exception
     assert app.session_state["bt_output"][2]["trades"] > 0
     button("حفظ للمراقبة").click().run()
-    assert portfolio.get_watchlist()["symbol"].tolist() == ["2222.SR"]
+    assert list(app.session_state["guest_watch"]) == ["2222.SR"]
     app.radio(key="market").set_value("الأمريكي").run()
     button("فتح السهم في الشارت").click().run()
     assert not app.exception

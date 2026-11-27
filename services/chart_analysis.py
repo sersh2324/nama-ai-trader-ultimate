@@ -102,31 +102,37 @@ def track_scenario(scenario, direction, frame, horizon=20, *, last_bar_closed=Fa
     state = "بانتظار التأكيد"
     reason = "بانتظار إغلاق شمعة يتجاوز مستوى التأكيد."
     changed_at = None
+    events = []
     targets = [{"price": price, "reached_at": None} for price in setup["targets"]]
     for timestamp, bar in bars.iterrows():
         close = bar["Close"]
         if sign * (close - setup["invalidation"]) < 0:
             state, reason = "ألغي", "أغلقت شمعة وراء مستوى الإلغاء."
             changed_at = str(timestamp)
+            events.append({"kind": state, "at": changed_at})
             break
         if state == "بانتظار التأكيد":
             if sign * (close - setup["trigger"]) > 0:
                 state, reason = "تأكد", "أغلقت شمعة وراء مستوى التأكيد."
                 changed_at = str(timestamp)
+                events.append({"kind": state, "at": changed_at})
             continue
         extreme = bar["High"] if sign == 1 else bar["Low"]
-        for target in targets:
+        for index, target in enumerate(targets, 1):
             if target["reached_at"] is None and sign * (extreme - target["price"]) >= 0:
                 target["reached_at"] = str(timestamp)
+                events.append({"kind": f"بلغ الهدف {index}", "at": target["reached_at"]})
         if targets and all(target["reached_at"] for target in targets):
             state, reason = "اكتملت الأهداف", "بلغت الشموع اللاحقة جميع الأهداف."
             changed_at = str(timestamp)
+            events.append({"kind": state, "at": changed_at})
             break
     else:
         if len(bars) == horizon:
             state, reason = "انتهى", "انتهت مدة المتابعة المحددة بالشموع."
             changed_at = str(bars.index[-1])
-    return {"state": state, "reason": reason, "at": changed_at, "targets": targets}
+            events.append({"kind": state, "at": changed_at})
+    return {"state": state, "reason": reason, "at": changed_at, "targets": targets, "events": events}
 
 
 
