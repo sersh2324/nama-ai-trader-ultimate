@@ -287,3 +287,22 @@ def test_chart_news_uses_only_dated_headlines_known_by_cutoff():
     evidence = recent_chart_news(articles, "2026-11-25")
     assert [item["title"] for item in evidence] == ["Profit growth"]
     assert evidence[0]["tone"] == "إيجابي مبدئي"
+
+
+
+def test_workspace_scale_uses_visible_candles_without_hiding_history():
+    frame = bars([250] * 100 + [26.1, 26.2, 26.3] * 10)
+    levels = [("الهدف", 35, "#64E4B5")]
+    fig = price_chart(frame, [], "SAR", workspace_interval="1d",
+                      viewport_bars=30, scenario_levels=levels, interaction="zoom")
+    assert len(fig.data[0].x) == 130
+    assert fig.layout.yaxis.range[1] < 29
+    assert fig.layout.xaxis.range[0] == frame.index[-30] - pd.Timedelta(hours=12)
+    assert fig.layout.yaxis.showspikes and fig.layout.xaxis.showspikes
+    assert fig.layout.dragmode == "zoom"
+    assert "افتتاح" in fig.data[0].text[-1] and "إغلاق" in fig.data[0].text[-1]
+    assert fig.layout.shapes[0].y0 == 35
+
+    with_levels = price_chart(frame, [], "SAR", workspace_interval="1d",
+                              viewport_bars=30, scenario_levels=levels, fit_levels=True)
+    assert with_levels.layout.yaxis.range[1] > 35
