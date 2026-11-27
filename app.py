@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone
 from time import monotonic
 import pandas as pd
@@ -9,6 +10,7 @@ from services.alpaca_data import alpaca_available, get_alpaca_history
 from services.chart_analysis import (chart_scenario, last_chart_bar_closed, recent_chart_news,
                                      scenario_details, track_scenario)
 from services.charts import price_chart
+from services.live_prices import FEEDS, StockStream, merge_minutes
 from services.opportunity_explanation import explain_opportunity
 from services.opportunity_ui import show_opportunity
 from services.indicators import add_indicators
@@ -26,7 +28,7 @@ from services.workspace_ui import WORKSPACE_STYLE
 from services import monitoring
 from services.monitoring_ui import account_owner, save_scenario, save_watch, show_saved_scenarios, watch_rows
 
-VERSION = "1.6.0-beta"
+VERSION = "1.7.0-beta"
 CHART_PROMPT = (
     "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة والأخبار المعروضة إن وجدت. "
     "اعتمد حصراً على القيم الواردة. اذكر أن السيناريو مشروط بالإغلاق خارج النطاق. "
@@ -55,7 +57,7 @@ intervals, periods, period_default = {
     "استثمار طويل الأجل": (["1d", "1wk", "1mo"], ["2y", "5y", "10y"], 1),
 }[style]
 interval_names = {
-    "5m": "5 دقائق", "15m": "15 دقيقة", "30m": "30 دقيقة", "60m": "ساعة",
+    "1m": "دقيقة واحدة", "5m": "5 دقائق", "15m": "15 دقيقة", "30m": "30 دقيقة", "60m": "ساعة",
     "1h": "ساعة", "1d": "يومي", "1wk": "أسبوعي", "1mo": "شهري",
 }
 interval = time_settings.selectbox("مدة الشمعة", intervals, index=1, format_func=interval_names.get)
@@ -68,6 +70,11 @@ with st.sidebar:
     threshold = st.slider("حد جودة الإشارة", 50, 95, 70, 1)
     fee_pct = st.number_input("تكاليف الصفقة الإجمالية %", 0.0, 5.0, 0.15, 0.05)
     slippage_pct = st.number_input("الانزلاق السعري %", 0.0, 5.0, 0.10, 0.05)
+
+@st.cache_resource
+def stock_stream(feed):
+    return StockStream(feed)
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_universe(market_name):
@@ -230,9 +237,9 @@ with chart_tab:
         st.info("اختر السوق ثم ابحث عن السهم لعرض الشارت.")
     else:
         st.subheader(company_label(detail_symbol))
-        quick_periods = {"5m": "30d", "15m": "30d", "1h": "60d", "1d": "2y", "1wk": "5y"}
-        quick_labels = {"5m": "5 د", "15m": "15 د", "1h": "ساعة", "1d": "يوم", "1wk": "أسبوع"}
-        quick_interval = st.radio("فاصل الشارت", list(quick_periods), horizontal=True, index=3,
+        quick_periods = {"1m": "7d", "5m": "30d", "15m": "30d", "1h": "60d", "1d": "2y", "1wk": "5y"}
+        quick_labels = {"1m": "1 د", "5m": "5 د", "15m": "15 د", "1h": "ساعة", "1d": "يوم", "1wk": "أسبوع"}
+        quick_interval = st.radio("فاصل الشارت", list(quick_periods), horizontal=True, index=4,
                                   format_func=quick_labels.get, key="chart_quick_interval")
         chart_period, chart_interval = quick_periods[quick_interval], quick_interval
         can_refresh_live = alpaca_available(detail_symbol)
@@ -251,7 +258,15 @@ with chart_tab:
         live = (controls.checkbox("تحديث كل 30 ثانية", value=True, key="chart_live")
                 if can_refresh_live else controls.checkbox("متابعة الأسعار كل دقيقتين", value=False))
         historical = history_controls.toggle("اختيار تاريخ البداية والنهاية", key="chart_historical")
-        poll_interval = ("30s" if can_refresh_live else "120s") if live and not historical else None
+        expected_feed = os.getenv("NAMA_ALPACA_FEED", "iex").strip().lower()
+        stream_supported = can_refresh_live and chart_interval == "1m" and expected_feed in FEEDS
+        stream_enabled = stream_supported and not historical and chart_tab.open
+        if stream_enabled:
+            stream_enabled = st.toggle("بث شمعة الدقيقة", value=True,
+                                       help="تُعرض الصفقات الواردة من Alpaca نحو مرة في الثانية.")
+        poll_interval = "1s" if stream_enabled else (
+            ("30s" if can_refresh_live else "120s") if live and not historical and chart_tab.open else None
+        )
         overlays = []
         if ema:
             overlays.extend([("EMA20", "#e7ae55"), ("EMA50", "#6299ed"), ("EMA200", "#ac84ee")])
@@ -290,6 +305,37 @@ with chart_tab:
             source = f"Alpaca · {feed.upper()}" if feed else "Yahoo Finance · قد تتأخر البيانات"
             analysis_frame = frame
             display_frame = frame
+            stream_revision = None
+            live_caption = None
+            if not historical and chart_interval == "1m":
+                if stream_enabled and feed == expected_feed:
+                    status, records, latest_trade = stock_stream(feed).read(detail_symbol)
+                    now = pd.Timestamp.now(tz="UTC")
+                    if records:
+                        render_key = (detail_key, st.session_state.chart_fetched_at,
+                                      now.floor("min"), records)
+                        cached = st.session_state.get("live_chart_frame")
+                        if cached and cached[0] == render_key:
+                            display_frame = cached[1]
+                        else:
+                            display_frame = add_indicators(merge_minutes(frame, records, now))
+                            st.session_state.live_chart_frame = (render_key, display_frame)
+                    forming = any(start == now.floor("min") and not official
+                                  for start, *_, official in records)
+                    freshness = "بانتظار صفقة جديدة"
+                    if latest_trade is not None:
+                        trade_label = latest_trade.tz_convert("America/New_York").strftime("%m-%d %H:%M:%S")
+                        freshness = f"آخر صفقة {trade_label} بتوقيت نيويورك"
+                        if now - latest_trade > pd.Timedelta(seconds=90):
+                            freshness += " · لم تصل صفقة حديثة"
+                    phase = "شمعة قيد التكوّن" if forming else "تبدأ الشمعة التالية عند وصول أول صفقة"
+                    coverage = "بورصة IEX فقط" if feed == "iex" else "تغذية SIP"
+                    live_caption = f"بث الدقيقة · {status} · {coverage} · {freshness} · {phase}"
+                    stream_revision = str(display_frame.index[-1])
+                elif not stream_supported:
+                    live_caption = "البث اللحظي غير متاح لهذا السهم. يظهر آخر سجل متاح من مصدر السعر."
+                elif stream_enabled:
+                    live_caption = "تعذّر تحميل سجل Alpaca المطابق للبث. الرسم يعرض آخر بيانات متاحة."
             date_range = None
             if historical:
                 dates = frame.index.date
@@ -308,9 +354,14 @@ with chart_tab:
             last = display_frame.iloc[-1]
             previous = analysis_frame["Close"].iloc[-2] if len(analysis_frame) > 1 else None
             change = f"{(last['Close'] / previous - 1):+.2%}" if previous else None
+            if stream_revision:
+                previous = display_frame["Close"].iloc[-2] if len(display_frame) > 1 else None
+                change = f"{(last['Close'] / previous - 1):+.2%}" if previous else None
             st.metric("إغلاق آخر شمعة معروضة" if historical else "آخر سعر داخل الشمعة",
                       f"{last['Close']:,.2f} {currency}", change,
                       help="التغيّر مقارنة بإغلاق الشمعة السابقة على نفس الفاصل.")
+            if live_caption:
+                st.caption(live_caption)
             received_at = st.session_state.get("chart_received_at")
             received_label = received_at.strftime("%H:%M:%S UTC") if received_at else "غير مسجل"
             analysis_key = (detail_key, feed, date_range)
@@ -365,7 +416,12 @@ with chart_tab:
             chart_tool = chart_tools.selectbox("أداة الشارت", ["تحريك", "تكبير منطقة", "رسم خط"],
                                                key="workspace_chart_tool")
             interaction = {"تحريك": "pan", "تكبير منطقة": "zoom", "رسم خط": "drawline"}[chart_tool]
+            if stream_enabled:
+                follow_latest = chart_tools.checkbox("متابعة آخر شمعة تلقائيًا", value=True)
+            else:
+                follow_latest = False
             view_key = (analysis_key, viewport_bars, fit_levels, chart_type, panel, tuple(overlays),
+                        stream_revision if follow_latest else None,
                         st.session_state.get("chart_view_revision", 0))
             figure = price_chart(display_frame, overlays, currency, zones=zones, panel=panel,
                                  view_key=str(view_key), chart_type=chart_type,

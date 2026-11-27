@@ -8,7 +8,7 @@ import requests
 from services.market_data import normalize_history
 
 TIMEFRAMES = {
-    "5m": "5Min", "15m": "15Min", "30m": "30Min", "60m": "1Hour",
+    "1m": "1Min", "5m": "5Min", "15m": "15Min", "30m": "30Min", "60m": "1Hour",
     "1h": "1Hour", "1d": "1Day", "1wk": "1Week", "1mo": "1Month",
 }
 BAR_COLUMNS = {"o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"}
