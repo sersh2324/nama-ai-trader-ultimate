@@ -37,3 +37,30 @@ def test_later_window_never_opens_a_trade_using_earlier_signals(monkeypatch):
     assert not trades.empty
     assert pd.to_datetime(trades["signal_date"]).min() == index[70]
     assert pd.to_datetime(trades["entry_date"]).min() == index[71]
+
+
+def test_scanner_uses_selected_threshold_and_shows_exit_rule(monkeypatch):
+    bars = pd.DataFrame({"Open": 100, "High": 102, "Low": 99, "Close": 101, "Volume": 1000},
+                        index=pd.date_range("2025-01-01", periods=60))
+    monkeypatch.setattr(scanner, "evaluate_strategy", lambda _, key: {
+        "score": 65, "strategy": key, "strategy_ar": key, "reasons": ["اختبار"],
+    })
+    result = scanner.analyze_symbol("AAPL", bars, selected_strategy="trend_following", threshold=65)
+    assert result["signal"] == "شراء محتمل"
+    assert result["stop"] < result["entry"] < result["target"]
+    assert result["risk_reward"] > 1 and result["exit_rule"]
+    assert scanner.analyze_symbol("AAPL", bars)["signal"] == "مراقبة"
+
+
+def test_backtest_preserves_the_exit_candle_for_the_next_signal(monkeypatch):
+    bars = pd.DataFrame(
+        {"Open": 100, "High": 106, "Low": 99, "Close": 101, "ATR": 2},
+        index=pd.date_range("2025-01-01", periods=63),
+    )
+    monkeypatch.setattr(backtest, "add_indicators", lambda raw: raw)
+    monkeypatch.setattr(backtest, "evaluate_strategy", lambda *_: {"score": 90, "reasons": ["اختبار"]})
+    trades, _ = backtest.run_backtest(bars)
+    assert len(trades) == 3
+    assert trades.iloc[1]["signal_date"] == trades.iloc[0]["exit_date"]
+    assert trades.iloc[0]["signal_reason"] == "اختبار"
+    assert trades.iloc[0]["risk_reward"] == pytest.approx(5 / 3)

@@ -172,12 +172,12 @@ with scanner_tab:
             errors.extend(batch_errors)
             for sym in batch:
                 try:
-                    result=analyze_symbol(sym,histories.get(sym),style,strategy_choice)
+                    result=analyze_symbol(sym,histories.get(sym),style,strategy_choice,threshold=threshold)
                     if result:
                         snapshots[sym] = result.pop('frame').tail(80).copy()
                         result['company']=universe.get(sym,company_name(sym))
                         rows.append(result)
-                        if result['score'] >= threshold:
+                        if result['signal'] == "شراء محتمل":
                             add_alert(sym,result['score'],result['signal'],result['strategy'],'؛ '.join(result['reasons']))
                     elif sym in histories:
                         errors.append(f'{sym}: insufficient history')
@@ -284,8 +284,10 @@ with chart_tab:
             if refresh or not detail or detail[0] != detail_key or poll_due:
                 with st.spinner("جارٍ جلب أسعار السهم..."):
                     raw, feed = get_alpaca_history(detail_symbol, chart_period, chart_interval)
+                    alpaca_status = raw.attrs.get("alpaca_status")
                     if raw.empty:
                         raw = get_history(detail_symbol, chart_period, chart_interval)
+                    st.session_state.chart_alpaca_status = alpaca_status
                     stale = raw.empty and detail and detail[0] == detail_key and not detail[1].empty
                     if not stale:
                         detail = (detail_key, add_indicators(raw), feed)
@@ -297,6 +299,8 @@ with chart_tab:
             _, frame, feed = detail
             if frame.empty:
                 st.info("لم تتوفر أسعار لهذا الرمز والفاصل. جرّب فاصلًا آخر أو حدّث البيانات.")
+                if st.session_state.get("chart_alpaca_status"):
+                    st.caption(st.session_state.chart_alpaca_status)
                 st.button("تحديث الأسعار", on_click=st.session_state.__setitem__,
                           args=("chart_refresh_requested", True))
                 return
@@ -335,7 +339,9 @@ with chart_tab:
                 elif not stream_supported:
                     live_caption = "البث اللحظي غير متاح لهذا السهم. يظهر آخر سجل متاح من مصدر السعر."
                 elif stream_enabled:
-                    live_caption = "تعذّر تحميل سجل Alpaca المطابق للبث. الرسم يعرض آخر بيانات متاحة."
+                    status, _, _ = stock_stream(expected_feed).read(detail_symbol)
+                    live_caption = (f"اتصال بث الدقيقة · {status} · "
+                                    "يعرض الشارت السجل البديل حتى يتوفر سجل مطابق لتغذية البث.")
             date_range = None
             if historical:
                 dates = frame.index.date
@@ -439,7 +445,8 @@ with chart_tab:
             elif not historical and (pd.Timestamp.now(tz=market_zone).date() - bar_start.date()).days > 1:
                 st.caption("آخر شمعة من جلسة سابقة. راجع تاريخها قبل متابعة السيناريو.")
             if can_refresh_live and not feed:
-                st.info("تعذّرت بيانات Alpaca لهذا السهم أو الفاصل. الشارت يعرض المصدر البديل.")
+                reason = st.session_state.get("chart_alpaca_status") or "تعذّرت بيانات Alpaca لهذا السهم أو الفاصل."
+                st.info(f"{reason} الشارت يعرض المصدر البديل.")
 
             analyze_action, refresh_action, watch_action = st.columns([2, 1, 1])
             analyze_action.button("حلّل بالذكاء الاصطناعي", type="primary", width="stretch",
@@ -506,6 +513,10 @@ with chart_tab:
                     levels[1].metric("دخول مرجعي", f"{match['entry']:,.2f}")
                     levels[2].metric("وقف الخسارة", f"{match['stop']:,.2f}")
                     levels[3].metric("الهدف", f"{match['target']:,.2f}")
+                    if match["risk_reward"] is not None:
+                        st.caption(f"العائد إلى المخاطرة قبل التكاليف · {match['risk_reward']:.2f}")
+                    st.write("؛ ".join(match["reasons"]))
+                    st.caption(match["exit_rule"])
             with st.expander("آخر 15 شمعة والمؤشرات"):
                 st.dataframe(display_frame.tail(15), width="stretch")
 
@@ -587,6 +598,12 @@ with backtest_tab:
         st.session_state.pop("bt_output", None)
         with st.spinner("جارٍ تحميل البيانات وتشغيل الاختبار..."):
             raw = get_history(bt_sym, bt_period, bt_interval)
+            if not raw.empty:
+                last_bar = pd.Timestamp(raw.index[-1])
+                if last_bar.tz is None:
+                    last_bar = last_bar.tz_localize("Asia/Riyadh" if bt_sym.endswith(".SR") else "America/New_York")
+                if not last_chart_bar_closed(last_bar, bt_interval, datetime.now(timezone.utc)):
+                    raw = raw.iloc[:-1]
             cutoff = raw.index[int(len(raw) * 0.70)] if holdout and len(raw) >= 86 else None
             if len(raw) < 61 or (holdout and cutoff is None):
                 st.session_state.bt_output = (bt_key, None, None)
