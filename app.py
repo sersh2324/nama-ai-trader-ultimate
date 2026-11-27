@@ -18,13 +18,15 @@ from services.scanner import analyze_symbol
 from services.backtest import run_backtest
 from services.risk_manager import position_size
 from services.portfolio import (initialize, add_trade, get_trades, clear_trades,
-                                add_alert, get_alerts, clear_alerts, add_watch, get_watchlist)
+                                add_alert, get_alerts, clear_alerts)
 from services.symbols import SA, US, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
 from services.workspace_ui import WORKSPACE_STYLE
+from services import monitoring
+from services.monitoring_ui import account_owner, save_scenario, save_watch, show_saved_scenarios, watch_rows
 
-VERSION = "1.5.1-beta"
+VERSION = "1.6.0-beta"
 CHART_PROMPT = (
     "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة والأخبار المعروضة إن وجدت. "
     "اعتمد حصراً على القيم الواردة. اذكر أن السيناريو مشروط بالإغلاق خارج النطاق. "
@@ -34,6 +36,7 @@ st.set_page_config(page_title="NAMA AI Trader", page_icon="📈", layout="wide",
                    initial_sidebar_state="collapsed")
 initialize()
 st.markdown(WORKSPACE_STYLE, unsafe_allow_html=True)
+owner = account_owner()
 
 watch_selection = st.session_state.pop("open_watch_symbol", None)
 if watch_selection:
@@ -191,7 +194,19 @@ with scanner_tab:
         candidates = [r for r in results if r["score"] >= threshold and r["signal"] != "لا توجد إشارة"]
         if candidates:
             st.subheader("الفرص المطابقة للفلتر")
-            by_symbol = {r["symbol"]: r for r in candidates}
+            for row in candidates:
+                row.setdefault("pattern", row["strategy"])
+            types = list(dict.fromkeys(row["pattern"] for row in candidates))
+            pattern = st.selectbox("نوع الفرصة", ["الكل", *types])
+            filtered = [row for row in candidates if pattern in ("الكل", row["pattern"])]
+            with st.expander("مقارنة الفرص"):
+                st.dataframe([{"السهم": row["symbol"], "النوع": row["pattern"],
+                               "الإشارة": row["signal"], "درجة القواعد": row["score"],
+                               "سبب الظهور": "؛ ".join(row["reasons"]),
+                               "آخر شمعة": str(snapshots[row["symbol"]].index[-1])}
+                              for row in filtered], hide_index=True, width="stretch")
+                st.caption("الدرجة تعبّر عن تطابق القواعد. الفاصل والمصدر موضحان في بطاقة السهم.")
+            by_symbol = {r["symbol"]: r for r in filtered}
             selected_opportunity = st.selectbox("اختر فرصة لعرض الشارت", by_symbol,
                                                 format_func=company_label)
             show_opportunity(by_symbol[selected_opportunity], snapshots[selected_opportunity], period, interval)
@@ -365,6 +380,8 @@ with chart_tab:
                        f"آخر جلب ناجح {received_label} · الفاصل {interval_names[chart_interval]}")
             if st.session_state.chart_stale:
                 st.warning("تعذّر تحديث السعر. تظهر آخر بيانات متاحة.")
+            elif not historical and (pd.Timestamp.now(tz=market_zone).date() - bar_start.date()).days > 1:
+                st.caption("آخر شمعة من جلسة سابقة. راجع تاريخها قبل متابعة السيناريو.")
             if can_refresh_live and not feed:
                 st.info("تعذّرت بيانات Alpaca لهذا السهم أو الفاصل. الشارت يعرض المصدر البديل.")
 
@@ -376,8 +393,7 @@ with chart_tab:
                                   on_click=st.session_state.__setitem__,
                                   args=("chart_refresh_requested", True))
             if watch_action.button("حفظ للمراقبة", width="stretch"):
-                add_watch(detail_symbol, "السعودي" if currency == "SAR" else "الأمريكي")
-                st.toast("تم حفظ السهم في المراقبة.")
+                save_watch(owner, detail_symbol, "السعودي" if currency == "SAR" else "الأمريكي")
             if scenario:
                 with st.container(border=True, key="scenario_card"):
                     bias = {"صاعد": "صعود محتمل", "هابط": "هبوط محتمل",
@@ -391,6 +407,10 @@ with chart_tab:
                     cancellation.metric("مستوى الإلغاء", f"{setup['invalidation']:,.2f}")
                     st.caption(f"إغلاق شمعة {trigger_side} مستوى التأكيد أو {invalidation_side} مستوى الإلغاء.")
                     st.write(scenario["reason"])
+                    if not historical and st.button("حفظ السيناريو للمتابعة"):
+                        saved_item = monitoring.snapshot(detail_symbol, chart_period, chart_interval,
+                                                         feed, direction, scenario)
+                        save_scenario(owner, saved_item)
                     if scenario["volume_ratio"] is not None:
                         st.caption(f"حجم الشمعة المرجعية ÷ متوسط 20 شمعة سابقة · {scenario['volume_ratio']:.2f}")
                     st.write(f"**{direction} · {tracking['state']}** · {tracking['reason']}")
@@ -504,20 +524,25 @@ with backtest_tab:
     bt_interval = st.selectbox("فاصل الاختبار", ["1d","1wk"], index=0)
     horizon = st.slider("أقصى مدة احتفاظ بالشموع", 2, 60, 15)
     bt_threshold = st.slider("حد الإشارة للاختبار", 50, 95, 70)
-    bt_key = (bt_sym, bt_strategy, bt_period, bt_interval, horizon, bt_threshold, fee_pct, slippage_pct)
+    holdout = st.checkbox("قيّم الاستراتيجية على آخر 30% من السجل",
+                          help="تُستخدم الشموع الأقدم لتهيئة المؤشرات. يبدأ احتساب الصفقات بعد حد الفصل.")
+    bt_key = (bt_sym, bt_strategy, bt_period, bt_interval, horizon, bt_threshold, fee_pct, slippage_pct, holdout)
     if st.button("تشغيل الاختبار التاريخي", disabled=bt_sym is None):
         st.session_state.pop("bt_output", None)
         with st.spinner("جارٍ تحميل البيانات وتشغيل الاختبار..."):
             raw = get_history(bt_sym, bt_period, bt_interval)
-            if len(raw) < 61:
+            cutoff = raw.index[int(len(raw) * 0.70)] if holdout and len(raw) >= 86 else None
+            if len(raw) < 61 or (holdout and cutoff is None):
                 st.session_state.bt_output = (bt_key, None, None)
             else:
-                trades, stats = run_backtest(raw, bt_strategy, bt_threshold, horizon, fee_pct, slippage_pct)
+                trades, stats = run_backtest(raw, bt_strategy, bt_threshold, horizon, fee_pct,
+                                             slippage_pct, evaluate_from=cutoff)
+                stats.update({"start_date": str(cutoff or raw.index[0]), "end_date": str(raw.index[-1])})
                 st.session_state.bt_output = (bt_key, trades, stats)
     if st.session_state.get("bt_output") and st.session_state.bt_output[0] == bt_key:
         _, trades, stats = st.session_state.bt_output
         if trades is None:
-            st.warning("البيانات غير متاحة أو أقل من 61 شمعة. جرّب فترة أطول أو فاصلًا أقصر.")
+            st.warning("البيانات غير كافية. جرّب فترة أطول أو فاصلًا أقصر.")
         else:
             cols = st.columns(3)
             cols[0].metric("عدد الصفقات", stats["trades"])
@@ -527,7 +552,11 @@ with backtest_tab:
             cols[0].metric("أقصى تراجع", f"{stats['max_drawdown_pct']}%")
             cols[1].metric("Profit Factor", str(stats["profit_factor"]))
             cols[2].metric("Expectancy", f"{stats['expectancy_pct']}%")
+            st.caption(f"نطاق البيانات {stats['start_date']} إلى {stats['end_date']} · "
+                       f"الرسوم {fee_pct:.2f}% والانزلاق {slippage_pct:.2f}% لكل صفقة مكتملة.")
             if not trades.empty:
+                equity = (1 + trades["return_pct"] / 100).cumprod().mul(100)
+                st.line_chart(pd.Series([100, *equity.tolist()], name="قيمة المحاكاة من أساس 100"))
                 st.dataframe(trades, width="stretch", hide_index=True)
                 st.download_button("تنزيل صفقات الاختبار CSV", trades.to_csv(index=False).encode("utf-8-sig"),
                                    "nama_backtest.csv", "text/csv")
@@ -578,18 +607,16 @@ with alerts_tab:
 
 with watch_tab:
     st.subheader("قائمة المراقبة")
-    watch = get_watchlist()
-    if watch.empty:
+    watch = watch_rows(owner)
+    if not watch:
         st.info("احفظ سهمًا من شاشة الشارت ليظهر هنا.")
     else:
-        saved_symbols = watch["symbol"].tolist()
-        saved_symbol = st.selectbox("الأسهم المحفوظة", saved_symbols, format_func=company_label)
+        saved_symbol = st.selectbox("الأسهم المحفوظة", [row[0] for row in watch], format_func=company_label)
         st.button("فتح السهم في الشارت", on_click=st.session_state.__setitem__,
                   args=("open_watch_symbol", saved_symbol))
-        st.dataframe(watch.rename(columns={"symbol": "الرمز", "market": "السوق",
-                                        "added_at": "تاريخ الإضافة"}),
-                     width="stretch", hide_index=True)
-    st.caption("تُحفظ القائمة في قاعدة بيانات التطبيق المحلية.")
+        st.dataframe([{"الرمز": symbol, "السوق": market_name, "تاريخ الإضافة": added_at}
+                      for symbol, market_name, added_at in watch], hide_index=True, width="stretch")
+    show_saved_scenarios(owner, active=watch_tab.open)
 
 st.divider()
 st.caption(f"NAMA AI Trader · {VERSION} — نظام تحليلي تعليمي. بيانات مجانية قد تكون متأخرة أو غير مكتملة. ليست توصية مالية أو ضماناً للربح. التداول الحقيقي الآلي غير مفعل.")

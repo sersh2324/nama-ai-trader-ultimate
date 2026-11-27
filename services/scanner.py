@@ -33,8 +33,24 @@ def analyze_symbol(symbol: str, raw, style="سوينغ", selected_strategy="auto
     return {
         "symbol": symbol, "price": price, "score": score, "signal": signal,
         "strategy": best["strategy_ar"], "strategy_key": best["strategy"],
+        "pattern": explain_pattern(frame, best["strategy"]),
         "reasons": best["reasons"], "rsi": float(row["RSI"]) if row["RSI"] == row["RSI"] else None,
         "atr_pct": float(row["ATR_Pct"]) if row["ATR_Pct"] == row["ATR_Pct"] else None,
         "entry": price, "stop": stop, "target": target, "risk_reward": rr,
         "frame": frame
     }
+
+
+def explain_pattern(frame, strategy):
+    current = frame.iloc[-1]
+    previous = frame.iloc[-2]
+    breakout_level = previous["High20_Prev"]
+    if current["Close"] > current["High20_Prev"]:
+        return "اختراق قمة 20 شمعة"
+    if (previous["Close"] > breakout_level
+            and current["Low"] <= breakout_level <= current["Close"]):
+        return "إعادة اختبار الاختراق"
+    support = frame["Low"].iloc[-21:-1].min()
+    if current["Low"] <= support <= current["Close"] and current["Close"] > current["Open"]:
+        return "ارتداد قرب دعم 20 شمعة"
+    return STRATEGIES[strategy]
