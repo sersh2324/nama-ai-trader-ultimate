@@ -22,50 +22,29 @@ from services.portfolio import (initialize, add_trade, get_trades, clear_trades,
 from services.symbols import SA, US, company_name
 from strategies.rules import STRATEGIES
 from services.news_engine import classify_headline
+from services.workspace_ui import WORKSPACE_STYLE
 
-VERSION = "1.4.0-beta"
+VERSION = "1.5.0-beta"
 CHART_PROMPT = (
     "اشرح للمبتدئ بالعربية الاتجاه ومناطق الدعم والمقاومة والأخبار المعروضة إن وجدت. "
     "اعتمد حصراً على القيم الواردة. اذكر أن السيناريو مشروط بالإغلاق خارج النطاق. "
     "صف الخبر كمحفز محتمل، ولا تنسب إليه حركة السعر من دون دليل. لا تخترع أهدافاً أو أخباراً."
 )
-st.set_page_config(page_title="NAMA AI Trader Ultimate", page_icon="📈", layout="wide")
+st.set_page_config(page_title="NAMA AI Trader", page_icon="📈", layout="wide",
+                   initial_sidebar_state="collapsed")
 initialize()
+st.markdown(WORKSPACE_STYLE, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-.block-container { padding-top: 3.3rem; }
-.nama-title {
-    direction: rtl;
-    text-align: right;
-    margin-bottom: 1rem;
-    padding: 1.15rem 1.35rem;
-    border-radius: 1rem;
-    background: #132b3f;
-    color: #f1f7fc;
-}
-.nama-title h1 { color: inherit; font-size: clamp(1.5rem, 4vw, 2.1rem); padding: 0; }
-.nama-title p { color: #d5e4eb; margin: .35rem 0 0; }
-[data-testid="stMetric"] {
-    padding: .55rem .75rem;
-    border: 1px solid rgba(122, 146, 163, .25);
-    border-radius: .65rem;
-}
-[data-testid="stMetricValue"] { font-size: clamp(1.15rem, 2.7vw, 1.65rem); }
-@media (max-width: 640px) {
-    .block-container { padding: 3rem .9rem 1rem; }
-}
-</style>
-<div class="nama-title">
-  <h1>NAMA AI Trader</h1>
-  <p>اختر سهمًا لمتابعة سعره وتحليله على الشارت</p>
-</div>
-""", unsafe_allow_html=True)
+watch_selection = st.session_state.pop("open_watch_symbol", None)
+if watch_selection:
+    st.session_state.workspace_tab = "الشارت والتحليل"
+    st.session_state.last_opened_watch_symbol = watch_selection
+    st.session_state.market = "السعودي" if watch_selection.endswith(".SR") else "الأمريكي"
 
 market_column, directory_column = st.columns([2, 3], vertical_alignment="bottom")
 market = market_column.radio("السوق", ["الأمريكي", "السعودي", "السوقان معًا"],
                             horizontal=True, key="market")
-time_settings = st.popover("إعدادات الفترة والفاصل")
+time_settings = st.sidebar.popover("إعدادات الفترة والفاصل للماسح والأدوات")
 style = time_settings.selectbox("نمط التداول", ["مضاربة يومية", "سوينغ", "استثمار طويل الأجل"], index=1)
 intervals, periods, period_default = {
     "مضاربة يومية": (["5m", "15m", "30m", "60m"], ["5d", "30d", "60d"], 1),
@@ -108,7 +87,7 @@ options = sorted(universe)
 popular = list(dict.fromkeys([*US, *SA]))
 picker_options = [symbol for symbol in popular if symbol in universe]
 picker_options.extend(symbol for symbol in options if symbol not in US and symbol not in SA)
-with st.expander("أسهم الماسح اليدوي وإضافة رموز"):
+with st.sidebar.expander("أسهم الماسح اليدوي وإضافة رموز"):
     selected = st.multiselect("أسهم الماسح اليدوي", picker_options,
                               format_func=company_label, max_selections=100)
     manual = st.text_input("إضافة رموز أخرى (افصل بينها بفاصلة)", "")
@@ -120,7 +99,16 @@ for value in manual.split(','):
     if symbol:
         manual_symbols.append(symbol)
 symbols = list(dict.fromkeys(selected + manual_symbols))[:100]
-analysis_options = list(dict.fromkeys(picker_options + manual_symbols))
+saved_lookup = st.session_state.get("last_opened_watch_symbol")
+if saved_lookup:
+    saved_market = "السعودي" if saved_lookup.endswith(".SR") else "الأمريكي"
+    if market not in (saved_market, "السوقان معًا"):
+        saved_lookup = None
+analysis_options = list(dict.fromkeys(picker_options + manual_symbols + (
+    [saved_lookup] if saved_lookup else []
+)))
+if watch_selection:
+    st.session_state.detail_sym = watch_selection
 detail_symbol = directory_column.selectbox("بحث باسم الشركة أو الرمز", analysis_options,
                              format_func=company_label, key="detail_sym",
                              placeholder="ابحث عن سهم")
@@ -129,12 +117,10 @@ if discovery_warnings:
         for warning in discovery_warnings:
             st.warning(warning)
 
-chart_tab, scanner_tab, market_tab, *remaining_tabs = st.tabs([
-    "الشارت والتحليل", "اكتشاف الفرص", "لوحة السوق", "خطة الصفقة", "المحفظة",
-    "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات",
-])
-
-plan_tab, portfolio_tab, backtest_tab, news_tab, alerts_tab = remaining_tabs
+chart_tab, scanner_tab, watch_tab, portfolio_tab, market_tab, plan_tab, backtest_tab, news_tab, alerts_tab = st.tabs([
+    "الشارت والتحليل", "اكتشاف الفرص", "المراقبة", "المحفظة", "لوحة السوق",
+    "خطة الصفقة", "الاختبار التاريخي", "الأخبار والأساسيات", "التنبيهات",
+], key="workspace_tab", on_change="rerun")
 
 with market_tab:
     st.subheader("لوحة السوق")
@@ -158,7 +144,7 @@ with scanner_tab:
         scan_symbols = options[int(scan_offset):int(scan_offset)+int(scan_limit)]
     else:
         scan_symbols = symbols
-        st.caption(f'عدد الرموز المختارة يدويًا: {len(symbols)}')
+        st.caption(f'عدد الرموز المختارة يدويًا: {len(symbols)}. غيّرها من «أسهم الماسح اليدوي» في القائمة الجانبية.')
     st.write(f'**عدد الرموز التي سيحاول الماسح فحصها: {len(scan_symbols)}**')
     if not scan_symbols:
         st.error('لا توجد رموز للفحص. تحقق من تحميل دليل الشركات، أو أضف رمزًا يدويًا ثم اختر الوضع اليدوي.')
@@ -214,7 +200,7 @@ with scanner_tab:
         with st.expander("كل نتائج الفحص"):
             table = pd.DataFrame([{k: v for k, v in r.items() if k not in ("reasons", "strategy_key")}
                                   for r in results])
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, width="stretch", hide_index=True)
             st.download_button("تنزيل النتائج CSV", table.to_csv(index=False).encode("utf-8-sig"),
                                "nama_scan_results.csv", "text/csv")
 
@@ -229,16 +215,26 @@ with chart_tab:
         st.info("اختر السوق ثم ابحث عن السهم لعرض الشارت.")
     else:
         st.subheader(company_label(detail_symbol))
+        quick_periods = {"5m": "30d", "15m": "30d", "1h": "60d", "1d": "2y", "1wk": "5y"}
+        quick_labels = {"5m": "5 د", "15m": "15 د", "1h": "ساعة", "1d": "يوم", "1wk": "أسبوع"}
+        quick_interval = st.radio("فاصل الشارت", list(quick_periods), horizontal=True, index=3,
+                                  format_func=quick_labels.get, key="chart_quick_interval")
+        chart_period, chart_interval = quick_periods[quick_interval], quick_interval
         can_refresh_live = alpaca_available(detail_symbol)
-        controls = st.popover("مؤشرات الشارت")
-        ema = controls.checkbox("المتوسطات EMA", value=True, key="chart_ema")
+        with st.container(horizontal=True, gap="small"):
+            controls = st.popover("المؤشرات والرسم")
+            history_controls = st.popover("الفترة والتاريخ")
+        custom_period = history_controls.checkbox("استخدم إعدادات الفترة المتقدمة")
+        if custom_period:
+            chart_period, chart_interval = period, interval
+        ema = controls.checkbox("المتوسطات EMA", value=False, key="chart_ema")
         bands = controls.checkbox("نطاقات بولينجر", key="chart_bands")
         panel = controls.selectbox("مؤشر إضافي", [None, "RSI", "MACD"],
                                       format_func=lambda value: value or "بدون")
         chart_type = controls.selectbox("نوع الشارت", ["شموع", "خط", "أعمدة سعرية"])
         live = (controls.checkbox("تحديث كل 30 ثانية", value=True, key="chart_live")
                 if can_refresh_live else controls.checkbox("متابعة الأسعار كل دقيقتين", value=False))
-        historical = st.toggle("اختيار تاريخ البداية والنهاية", key="chart_historical")
+        historical = history_controls.toggle("اختيار تاريخ البداية والنهاية", key="chart_historical")
         poll_interval = ("30s" if can_refresh_live else "120s") if live and not historical else None
         overlays = []
         if ema:
@@ -248,17 +244,17 @@ with chart_tab:
 
         @st.fragment(run_every=poll_interval)
         def show_stock_chart():
-            detail_key = (detail_symbol, period, interval)
-            actions = st.columns([1, 2])
-            refresh = actions[0].button("تحديث الأسعار")
-            analyze = actions[1].button("حلّل بالذكاء الاصطناعي", type="primary")
+            detail_key = (detail_symbol, chart_period, chart_interval)
+            refresh = st.session_state.pop("chart_refresh_requested", False)
+            analyze = st.session_state.pop("chart_analysis_requested", False)
             detail = st.session_state.get("detail")
             fetched_at = st.session_state.get("chart_fetched_at", 0)
-            if refresh or not detail or detail[0] != detail_key or (poll_interval and monotonic() - fetched_at >= (29 if can_refresh_live else 119)):
+            poll_due = poll_interval and monotonic() - fetched_at >= (29 if can_refresh_live else 119)
+            if refresh or not detail or detail[0] != detail_key or poll_due:
                 with st.spinner("جارٍ جلب أسعار السهم..."):
-                    raw, feed = get_alpaca_history(detail_symbol, period, interval)
+                    raw, feed = get_alpaca_history(detail_symbol, chart_period, chart_interval)
                     if raw.empty:
-                        raw = get_history(detail_symbol, period, interval)
+                        raw = get_history(detail_symbol, chart_period, chart_interval)
                     stale = raw.empty and detail and detail[0] == detail_key and not detail[1].empty
                     if not stale:
                         detail = (detail_key, add_indicators(raw), feed)
@@ -269,7 +265,9 @@ with chart_tab:
 
             _, frame, feed = detail
             if frame.empty:
-                st.info("لم تتوفر أسعار لهذا الرمز والفاصل. غيّر الفترة أو حدّث البيانات.")
+                st.info("لم تتوفر أسعار لهذا الرمز والفاصل. جرّب فاصلًا آخر أو حدّث البيانات.")
+                st.button("تحديث الأسعار", on_click=st.session_state.__setitem__,
+                          args=("chart_refresh_requested", True))
                 return
 
             currency = "SAR" if detail_symbol.endswith(".SR") else "USD"
@@ -292,24 +290,19 @@ with chart_tab:
                     st.info("لا توجد شموع ضمن هذا النطاق.")
                     return
             last = display_frame.iloc[-1]
-            metrics = st.columns(3)
-            metrics[0].metric("إغلاق آخر شمعة معروضة" if historical else "آخر سعر داخل الشمعة", f"{last['Close']:,.2f} {currency}")
-            for metric, column in zip(metrics[1:], ("RSI", "ADX")):
-                metric.metric(column, f"{last[column]:.2f}" if pd.notna(last[column]) else "—")
-            received_at = st.session_state.chart_received_at
-            st.caption(f"{source} · بداية آخر شمعة معروضة {display_frame.index[-1]} · "
-                       f"آخر جلب ناجح {received_at:%H:%M:%S} UTC · الفاصل {interval}")
-            if st.session_state.chart_stale:
-                st.warning("تعذّر تحديث السعر. تظهر آخر بيانات متاحة.")
-            if can_refresh_live and not feed:
-                st.info("تعذّرت بيانات Alpaca لهذا السهم أو الفاصل. الشارت يعرض المصدر البديل.")
-
+            previous = analysis_frame["Close"].iloc[-2] if len(analysis_frame) > 1 else None
+            change = f"{(last['Close'] / previous - 1):+.2%}" if previous else None
+            st.metric("إغلاق آخر شمعة معروضة" if historical else "آخر سعر داخل الشمعة",
+                      f"{last['Close']:,.2f} {currency}", change,
+                      help="التغيّر مقارنة بإغلاق الشمعة السابقة على نفس الفاصل.")
+            received_at = st.session_state.get("chart_received_at")
+            received_label = received_at.strftime("%H:%M:%S UTC") if received_at else "غير مسجل"
             analysis_key = (detail_key, feed, date_range)
             market_zone = "Asia/Riyadh" if currency == "SAR" else "America/New_York"
             bar_start = pd.Timestamp(analysis_frame.index[-1])
             if bar_start.tz is None:
                 bar_start = bar_start.tz_localize(market_zone)
-            last_closed = last_chart_bar_closed(bar_start, interval, datetime.now(timezone.utc))
+            last_closed = last_chart_bar_closed(bar_start, chart_interval, datetime.now(timezone.utc))
             if analyze:
                 scenario = chart_scenario(analysis_frame, last_bar_closed=last_closed)
                 if scenario is None:
@@ -321,7 +314,7 @@ with chart_tab:
                     if historical:
                         cutoff = min(bar_start, cutoff)
                     scenario = scenario_details(scenario, analysis_frame, recent_chart_news(articles, cutoff))
-                    facts = dict(scenario, symbol=detail_symbol, interval=interval, currency=currency)
+                    facts = dict(scenario, symbol=detail_symbol, interval=chart_interval, currency=currency)
                     try:
                         with st.spinner("جارٍ شرح الاتجاه والمستويات..."):
                             explanation = explain_opportunity(json.dumps(facts, ensure_ascii=False),
@@ -338,23 +331,48 @@ with chart_tab:
             chart_levels = []
             if scenario:
                 preferred = "هبوط" if scenario["trend"] == "هابط" else "صعود"
-                direction = st.selectbox("السيناريو على الشارت", ["صعود", "هبوط"],
-                                         index=int(preferred == "هبوط"), key=f"setup_{analysis_key}")
+                direction_key = f"setup_{analysis_key}"
+                direction = st.session_state.get(direction_key, preferred)
                 setup = scenario["setups"][direction]
                 tracking = track_scenario(scenario, direction, analysis_frame, last_bar_closed=last_closed)
-                chart_levels = [("التأكيد", setup["trigger"], "#3B82F6"),
-                                ("الإلغاء", setup["invalidation"], "#F26679")]
-                chart_levels.extend((f"الهدف {index}", target, "#28B88B")
+                chart_levels = [("التأكيد", setup["trigger"], "#F4D28B"),
+                                ("الإلغاء", setup["invalidation"], "#FF8E9D")]
+                chart_levels.extend((f"الهدف {index}", target, "#64E4B5")
                                     for index, target in enumerate(setup["targets"], 1))
             st.plotly_chart(price_chart(display_frame, overlays, currency, zones=zones, panel=panel,
                                         view_key=str(analysis_key), chart_type=chart_type,
-                                        scenario_levels=chart_levels, full_range=historical), use_container_width=True,
-                            config={"displaylogo": False, "scrollZoom": True}, key="price_chart")
+                                        scenario_levels=chart_levels, full_range=historical,
+                                        workspace_interval=chart_interval), width="stretch",
+                            theme=None, config={"displaylogo": False, "scrollZoom": True}, key="price_chart")
+            st.caption(f"{source} · بداية آخر شمعة معروضة {display_frame.index[-1]} · "
+                       f"آخر جلب ناجح {received_label} · الفاصل {interval_names[chart_interval]}")
+            if st.session_state.chart_stale:
+                st.warning("تعذّر تحديث السعر. تظهر آخر بيانات متاحة.")
+            if can_refresh_live and not feed:
+                st.info("تعذّرت بيانات Alpaca لهذا السهم أو الفاصل. الشارت يعرض المصدر البديل.")
+
+            analyze_action, refresh_action, watch_action = st.columns([2, 1, 1])
+            analyze_action.button("حلّل بالذكاء الاصطناعي", type="primary", width="stretch",
+                                  on_click=st.session_state.__setitem__,
+                                  args=("chart_analysis_requested", True))
+            refresh_action.button("تحديث الأسعار", width="stretch",
+                                  on_click=st.session_state.__setitem__,
+                                  args=("chart_refresh_requested", True))
+            if watch_action.button("حفظ للمراقبة", width="stretch"):
+                add_watch(detail_symbol, "السعودي" if currency == "SAR" else "الأمريكي")
+                st.toast("تم حفظ السهم في المراقبة.")
             if scenario:
-                with st.container(border=True):
+                with st.container(border=True, key="scenario_card"):
                     bias = {"صاعد": "صعود محتمل", "هابط": "هبوط محتمل",
                             "عرضي أو غير محسوم": "محايد"}[scenario["trend"]]
-                    st.subheader(f"الاتجاه على الفاصل المختار · {bias}")
+                    st.subheader(bias)
+                    st.selectbox("السيناريو على الشارت", ["صعود", "هبوط"],
+                                 index=int(preferred == "هبوط"), key=direction_key)
+                    trigger_side, invalidation_side = ("فوق", "تحت") if direction == "صعود" else ("تحت", "فوق")
+                    confirmation, cancellation = st.columns(2)
+                    confirmation.metric("مستوى التأكيد", f"{setup['trigger']:,.2f}")
+                    cancellation.metric("مستوى الإلغاء", f"{setup['invalidation']:,.2f}")
+                    st.caption(f"إغلاق شمعة {trigger_side} مستوى التأكيد أو {invalidation_side} مستوى الإلغاء.")
                     st.write(scenario["reason"])
                     if scenario["volume_ratio"] is not None:
                         st.caption(f"حجم الشمعة المرجعية ÷ متوسط 20 شمعة سابقة · {scenario['volume_ratio']:.2f}")
@@ -396,7 +414,7 @@ with chart_tab:
                     levels[2].metric("وقف الخسارة", f"{match['stop']:,.2f}")
                     levels[3].metric("الهدف", f"{match['target']:,.2f}")
             with st.expander("آخر 15 شمعة والمؤشرات"):
-                st.dataframe(display_frame.tail(15), use_container_width=True)
+                st.dataframe(display_frame.tail(15), width="stretch")
 
         show_stock_chart()
 
@@ -451,7 +469,7 @@ with portfolio_tab:
                 st.error("أدخل رمزاً صحيحاً.")
     trades = get_trades()
     if not trades.empty:
-        st.dataframe(trades, use_container_width=True, hide_index=True)
+        st.dataframe(trades, width="stretch", hide_index=True)
         st.download_button("تنزيل سجل المحفظة CSV", trades.to_csv(index=False).encode("utf-8-sig"),
                            "nama_portfolio.csv", "text/csv")
         if st.button("مسح سجل الصفقات"):
@@ -493,7 +511,7 @@ with backtest_tab:
             cols[1].metric("Profit Factor", str(stats["profit_factor"]))
             cols[2].metric("Expectancy", f"{stats['expectancy_pct']}%")
             if not trades.empty:
-                st.dataframe(trades, use_container_width=True, hide_index=True)
+                st.dataframe(trades, width="stretch", hide_index=True)
                 st.download_button("تنزيل صفقات الاختبار CSV", trades.to_csv(index=False).encode("utf-8-sig"),
                                    "nama_backtest.csv", "text/csv")
             else:
@@ -532,7 +550,7 @@ with alerts_tab:
     st.subheader("التنبيهات")
     alerts = get_alerts()
     if not alerts.empty:
-        st.dataframe(alerts, use_container_width=True, hide_index=True)
+        st.dataframe(alerts, width="stretch", hide_index=True)
         st.download_button("تنزيل التنبيهات CSV", alerts.to_csv(index=False).encode("utf-8-sig"),
                            "nama_alerts.csv", "text/csv")
         if st.button("مسح التنبيهات"):
@@ -540,10 +558,21 @@ with alerts_tab:
             st.rerun()
     else:
         st.info("لا توجد تنبيهات بعد.")
+
+with watch_tab:
+    st.subheader("قائمة المراقبة")
     watch = get_watchlist()
-    st.write("قائمة المراقبة")
-    if not watch.empty:
-        st.dataframe(watch, use_container_width=True, hide_index=True)
+    if watch.empty:
+        st.info("احفظ سهمًا من شاشة الشارت ليظهر هنا.")
+    else:
+        saved_symbols = watch["symbol"].tolist()
+        saved_symbol = st.selectbox("الأسهم المحفوظة", saved_symbols, format_func=company_label)
+        st.button("فتح السهم في الشارت", on_click=st.session_state.__setitem__,
+                  args=("open_watch_symbol", saved_symbol))
+        st.dataframe(watch.rename(columns={"symbol": "الرمز", "market": "السوق",
+                                        "added_at": "تاريخ الإضافة"}),
+                     width="stretch", hide_index=True)
+    st.caption("تُحفظ القائمة في قاعدة بيانات التطبيق المحلية.")
 
 st.divider()
 st.caption(f"NAMA AI Trader · {VERSION} — نظام تحليلي تعليمي. بيانات مجانية قد تكون متأخرة أو غير مكتملة. ليست توصية مالية أو ضماناً للربح. التداول الحقيقي الآلي غير مفعل.")

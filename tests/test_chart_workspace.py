@@ -151,6 +151,15 @@ def test_chart_first_ai_indicators_and_source_switch(monkeypatch, tmp_path):
 
     assert app.tabs[0].label == "الشارت والتحليل"
     assert any("Alpaca" in caption.value for caption in app.caption)
+    assert chart()["layout"]["paper_bgcolor"] == "#10212A"
+    assert len(chart()["data"][0]["x"]) == 70
+    assert chart()["layout"]["xaxis"]["range"][0].startswith("2025-01-10")
+    app.radio(key="chart_quick_interval").set_value("5m").run()
+    assert history_calls[-1] == ("AAPL", "30d", "5m")
+    assert any("الفاصل 5 دقائق" in caption.value for caption in app.caption)
+    next(widget for widget in app.checkbox if widget.label == "استخدم إعدادات الفترة المتقدمة").check().run()
+    app.checkbox(key="chart_ema").check().run()
+
     next(widget for widget in app.selectbox if widget.label == "مدة الشمعة").select("1wk").run()
     assert history_calls[-1] == ("AAPL", "2y", "1wk")
     next(widget for widget in app.selectbox if widget.label == "نطاق البيانات").select("1y").run()

@@ -1,10 +1,13 @@
+from collections import defaultdict
+
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
 def price_chart(history, overlays, currency, levels=None, title=None, *, zones=None, panel=None, view_key=None, chart_type="شموع",
-                scenario_levels=None, full_range=False):
-    bars = history if full_range else history.tail(250)
+                scenario_levels=None, full_range=False, workspace_interval=None):
+    bars = history if full_range or workspace_interval else history.tail(250)
     candles = bars.dropna(subset=["Open"])
     rows = 3 if panel else 2
     figure = make_subplots(
@@ -12,7 +15,7 @@ def price_chart(history, overlays, currency, levels=None, title=None, *, zones=N
         row_heights=[0.7, 0.12, 0.18] if panel else [0.78, 0.22],
         vertical_spacing=0.075,
     )
-    up, down = "#28B88B", "#F26679"
+    up, down = ("#64E4B5", "#FF8E9D") if workspace_interval else ("#28B88B", "#F26679")
     if candles.empty or chart_type == "خط":
         figure.add_trace(go.Scatter(x=bars.index, y=bars["Close"], name="الإغلاق",
                                     line={"color": up}), row=1, col=1)
@@ -59,6 +62,8 @@ def price_chart(history, overlays, currency, levels=None, title=None, *, zones=N
     figure.update_xaxes(rangeslider_visible=False)
     figure.update_yaxes(title_text=currency, side="right", fixedrange=False, row=1, col=1)
     figure.update_yaxes(title_text="الحجم", side="right", fixedrange=True, row=2, col=1)
+    if workspace_interval:
+        style_workspace(figure, bars.index, workspace_interval, panel, full_range)
     if levels:
         figure.add_hrect(y0=levels["trigger"], y1=levels["entry_ceiling"],
                          fillcolor="#3B82F6", opacity=0.16, line_width=0, row=1, col=1)
@@ -87,3 +92,33 @@ def price_chart(history, overlays, currency, levels=None, title=None, *, zones=N
     if title:
         figure.update_layout(title_text=title, margin_t=66)
     return figure
+
+
+
+def style_workspace(figure, timestamps, interval, panel, full_range):
+    """Show the latest candles at a readable scale while keeping the series pannable."""
+    figure.update_layout(
+        template="plotly_dark", paper_bgcolor="#10212A", plot_bgcolor="#10212A",
+        height=535 if panel else 440, margin={"l": 8, "r": 12, "t": 35, "b": 16},
+        font={"color": "#B7CDD1", "size": 12}, legend={"orientation": "h", "y": 1.08},
+    )
+    figure.update_xaxes(gridcolor="#263E48", showspikes=True, spikemode="across",
+                       spikethickness=1, spikecolor="#A6BEC6")
+    figure.update_yaxes(gridcolor="#263E48", zerolinecolor="#263E48", nticks=5)
+    bar_minutes = {"5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "1d": 1440}.get(interval)
+    if bar_minutes is None:
+        bar_width = (timestamps[-1] - timestamps[-2]) if len(timestamps) > 1 else pd.Timedelta(days=7)
+    else:
+        bar_width = pd.Timedelta(minutes=bar_minutes)
+        gaps = defaultdict(list)
+        for previous, current in zip(timestamps[:-1], timestamps[1:]):
+            gap = current - previous - bar_width
+            # Keep isolated missing bars visible. Compress longer gaps such as overnight sessions.
+            if gap >= 2 * bar_width:
+                gaps[int(gap / pd.Timedelta(milliseconds=1))].append(previous + bar_width)
+        if gaps:
+            figure.update_xaxes(rangebreaks=[{"values": starts, "dvalue": duration}
+                                             for duration, starts in gaps.items()])
+    if not full_range:
+        figure.update_xaxes(range=[timestamps[-min(60, len(timestamps))] - bar_width / 2,
+                                   timestamps[-1] + bar_width / 2])
